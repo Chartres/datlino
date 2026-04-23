@@ -50,6 +50,24 @@ impl PracticeMode {
     }
 }
 
+/// Three ways to pick content when the student chose the Content mode.
+///
+/// * `Across` — return the top-matching sentences spread across the whole
+///   library. Best when the student wants to connect ideas ("everywhere
+///   that mentions X").
+/// * `Chapter` — return every sentence of a single chapter, in order.
+///   Best for studying one section end-to-end.
+/// * `ExamPrep` — the student describes their exam topic in natural
+///   language; we return whole chapters ranked by how much they match.
+///   BM25-only for now; embeddings (Week 2) will dramatically improve this.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentStrategy {
+    Across,
+    Chapter,
+    ExamPrep,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionRequest {
     pub mode: PracticeMode,
@@ -61,6 +79,27 @@ pub struct SessionRequest {
     pub query: Option<String>,
     #[serde(default)]
     pub pinned_source_prefixes: Vec<String>,
+    /// Only consulted when `mode == Content`. Defaults to `Across`.
+    #[serde(default)]
+    pub content_strategy: Option<ContentStrategy>,
+    /// When `content_strategy == Chapter`, identifies which chapter to
+    /// load. Format: "<document_id>::<section>".
+    #[serde(default)]
+    pub chapter_id: Option<String>,
+}
+
+impl Default for SessionRequest {
+    fn default() -> Self {
+        Self {
+            mode: PracticeMode::Warmup,
+            alpha: 0.7,
+            target_duration_s: 300,
+            query: None,
+            pinned_source_prefixes: Vec::new(),
+            content_strategy: None,
+            chapter_id: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,7 +132,11 @@ pub fn create_session(
     req: &SessionRequest,
 ) -> Result<SessionPlan> {
     let sentences = match req.mode {
-        PracticeMode::Content => pick_content(conn, user_id, req)?,
+        PracticeMode::Content => match req.content_strategy.unwrap_or(ContentStrategy::Across) {
+            ContentStrategy::Across => pick_content(conn, user_id, req)?,
+            ContentStrategy::Chapter => pick_chapter(conn, req)?,
+            ContentStrategy::ExamPrep => pick_exam_prep(conn, req)?,
+        },
         PracticeMode::Warmup => pick_warmup(conn, req)?,
         PracticeMode::Diacritics => pick_diacritics(conn, req)?,
         PracticeMode::WeakKeys => pick_weak_keys(conn, user_id, req)?,
@@ -125,29 +168,35 @@ pub fn create_session(
     })
 }
 
-/// Pick by FTS5 relevance if query, else recency-aware sampling.
+/// **Across** strategy — BM25 hits spread across the whole library.
+///
+/// The student wants to see every place their topic is mentioned, to build
+/// connections. We return top-scoring sentences across many documents, de-
+/// duped, capped per document to force diversity, and ordered so different
+/// documents interleave rather than clumping.
+///
+/// Without a query we fall back to least-recently-typed, same diversity rules.
 fn pick_content(
     conn: &Connection,
     _user_id: i64,
     req: &SessionRequest,
 ) -> Result<Vec<SessionSentence>> {
     let budget = char_budget(req.target_duration_s);
+
+    if let Some(q) = req.query.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        return pick_across(conn, q, budget, &req.pinned_source_prefixes);
+    }
+
     let mut out = Vec::new();
     let mut total = 0usize;
-
-    let rows = if let Some(q) = req.query.as_deref().filter(|s| !s.trim().is_empty()) {
-        let hits = search::search(conn, q, 200)?;
-        hits.into_iter()
-            .filter(|h| source_allowed(&h.source_path, &req.pinned_source_prefixes))
-            .map(|h| (Some(h.chunk_id), h.text, Some(h.source_path)))
-            .collect::<Vec<_>>()
-    } else {
+    for (chunk_id, text, source_path) in
         least_recently_typed(conn, 200, &req.pinned_source_prefixes)?
-    };
-
-    for (chunk_id, text, source_path) in rows {
+    {
         if total >= budget && out.len() >= 6 {
             break;
+        }
+        if is_low_content(&text) {
+            continue;
         }
         total += text.chars().count();
         out.push(SessionSentence {
@@ -158,6 +207,269 @@ fn pick_content(
         });
     }
     Ok(out)
+}
+
+fn pick_across(
+    conn: &Connection,
+    query: &str,
+    budget: usize,
+    pinned: &[String],
+) -> Result<Vec<SessionSentence>> {
+    use std::collections::{HashMap, HashSet};
+
+    let hits = search::search(conn, query, 60)?;
+    let hits: Vec<_> = hits
+        .into_iter()
+        .filter(|h| source_allowed(&h.source_path, pinned))
+        .filter(|h| !is_low_content(&h.text))
+        .collect();
+    if hits.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Cap 3 hits per document, then round-robin interleave so the reader
+    // bounces between sources — this is exactly what "connect ideas across
+    // materials" means.
+    let mut per_doc: HashMap<i64, Vec<search::SearchHit>> = HashMap::new();
+    for h in hits {
+        per_doc.entry(h.document_id).or_default().push(h);
+    }
+    for v in per_doc.values_mut() {
+        v.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        v.truncate(3);
+    }
+    let mut queues: Vec<Vec<search::SearchHit>> = per_doc.into_values().collect();
+    // Order document queues by their best hit so strongest docs go first.
+    queues.sort_by(|a, b| {
+        let sa = a.first().map(|h| h.score).unwrap_or(0.0);
+        let sb = b.first().map(|h| h.score).unwrap_or(0.0);
+        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut total = 0usize;
+    let mut exhausted = false;
+    while !exhausted && total < budget {
+        exhausted = true;
+        for q in queues.iter_mut() {
+            if q.is_empty() {
+                continue;
+            }
+            let h = q.remove(0);
+            exhausted = false;
+            let text = h.text.trim().to_string();
+            if !seen.insert(text.clone()) {
+                continue;
+            }
+            total += text.chars().count();
+            out.push(SessionSentence {
+                chunk_id: Some(h.chunk_id),
+                text,
+                source_path: Some(h.source_path),
+                is_generated: false,
+            });
+            if total >= budget {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// **Chapter** strategy — every sentence of a single markdown section,
+/// in the order it appears in the source. Ideal for studying one chapter
+/// end-to-end with full continuity.
+fn pick_chapter(
+    conn: &Connection,
+    req: &SessionRequest,
+) -> Result<Vec<SessionSentence>> {
+    let budget = char_budget(req.target_duration_s);
+    let Some(ref id) = req.chapter_id else {
+        return Ok(Vec::new());
+    };
+    let Some((doc_id, section)) = parse_chapter_id(id) else {
+        return Ok(Vec::new());
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.text, d.source_path
+         FROM chunk c JOIN document d ON d.id = c.document_id
+         WHERE c.document_id = ?1 AND c.section = ?2 AND c.is_heading = 0
+         ORDER BY c.char_offset ASC",
+    )?;
+    let rows = stmt.query_map(params![doc_id, section], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })?;
+
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    for row in rows {
+        let (id, text, src) = row?;
+        if is_low_content(&text) {
+            continue;
+        }
+        total += text.chars().count();
+        out.push(SessionSentence {
+            chunk_id: Some(id),
+            text,
+            source_path: Some(src),
+            is_generated: false,
+        });
+        if total >= budget * 2 {
+            // Chapters can exceed the budget — let them; longer passages
+            // are deliberate in this mode.
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// **ExamPrep** strategy — the student describes the exam in natural
+/// language; we return whole chapters ranked by relevance. BM25-only for
+/// now; embeddings will massively improve topical recall (Week 2).
+fn pick_exam_prep(
+    conn: &Connection,
+    req: &SessionRequest,
+) -> Result<Vec<SessionSentence>> {
+    use std::collections::HashMap;
+    let budget = char_budget(req.target_duration_s);
+    let Some(q) = req.query.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        return Ok(Vec::new());
+    };
+
+    // Each whitespace-separated token becomes its own BM25 query; aggregate
+    // score per (document, section) gives us a chapter ranking.
+    let tokens: Vec<&str> = q
+        .split_whitespace()
+        .filter(|t| t.chars().count() >= 3)
+        .collect();
+    let queries: Vec<&str> = if tokens.is_empty() { vec![q] } else { tokens };
+
+    let mut chapter_scores: HashMap<(i64, String), (f64, String)> = HashMap::new();
+    for qq in &queries {
+        let hits = search::search(conn, qq, 80)?;
+        for h in hits {
+            if !source_allowed(&h.source_path, &req.pinned_source_prefixes) {
+                continue;
+            }
+            // Look up the section of this hit chunk.
+            let section: String = conn
+                .query_row(
+                    "SELECT section FROM chunk WHERE id = ?1",
+                    params![h.chunk_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or_default();
+            let key = (h.document_id, section);
+            let entry = chapter_scores
+                .entry(key)
+                .or_insert_with(|| (0.0, h.source_path.clone()));
+            entry.0 += h.score;
+        }
+    }
+    let mut ranked: Vec<_> = chapter_scores.into_iter().collect();
+    ranked.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap_or(std::cmp::Ordering::Equal));
+    // Top 4 chapters — enough breadth, still bounded.
+    ranked.truncate(4);
+
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    for ((doc_id, section), (_score, src)) in ranked {
+        let mut stmt = conn.prepare(
+            "SELECT id, text FROM chunk
+             WHERE document_id = ?1 AND section = ?2 AND is_heading = 0
+             ORDER BY char_offset ASC",
+        )?;
+        let rows = stmt.query_map(params![doc_id, section], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, text) = row?;
+            if is_low_content(&text) {
+                continue;
+            }
+            total += text.chars().count();
+            out.push(SessionSentence {
+                chunk_id: Some(id),
+                text,
+                source_path: Some(src.clone()),
+                is_generated: false,
+            });
+            if total >= budget * 2 {
+                break;
+            }
+        }
+        if total >= budget * 2 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+fn parse_chapter_id(s: &str) -> Option<(i64, String)> {
+    let (doc_str, section) = s.split_once("::")?;
+    let doc_id: i64 = doc_str.parse().ok()?;
+    Some((doc_id, section.to_string()))
+}
+
+/// Metadata for the chapter picker UI.
+#[derive(Debug, Serialize)]
+pub struct ChapterInfo {
+    pub id: String,
+    pub document_id: i64,
+    pub source_path: String,
+    pub section: String,
+    pub sentence_count: i64,
+}
+
+pub fn list_chapters(conn: &Connection) -> Result<Vec<ChapterInfo>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.document_id, d.source_path, c.section, COUNT(*) as n, MIN(c.char_offset) as first_off
+         FROM chunk c JOIN document d ON d.id = c.document_id
+         WHERE c.is_heading = 0 AND c.section != ''
+         GROUP BY c.document_id, c.section
+         HAVING n >= 2
+         ORDER BY c.document_id ASC, first_off ASC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let doc_id: i64 = r.get(0)?;
+        let src: String = r.get(1)?;
+        let section: String = r.get(2)?;
+        let n: i64 = r.get(3)?;
+        Ok(ChapterInfo {
+            id: format!("{}::{}", doc_id, section),
+            document_id: doc_id,
+            source_path: src,
+            section,
+            sentence_count: n,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Sentences we never send to the typing engine — headings without content,
+/// bullets that survived the segmenter, two-word fragments. We leave real
+/// long sentences alone — students have explicitly asked to see them.
+fn is_low_content(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.chars().count() < 12 {
+        return true;
+    }
+    // Fewer than 3 word-like tokens = probably a label.
+    let tokens = trimmed
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .count();
+    tokens < 3
 }
 
 fn pick_warmup(conn: &Connection, req: &SessionRequest) -> Result<Vec<SessionSentence>> {
@@ -533,6 +845,8 @@ mod tests {
             target_duration_s: 60,
             query: None,
             pinned_source_prefixes: vec![],
+            content_strategy: None,
+            chapter_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -549,6 +863,8 @@ mod tests {
             target_duration_s: 30,
             query: None,
             pinned_source_prefixes: vec![],
+            content_strategy: None,
+            chapter_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -565,10 +881,116 @@ mod tests {
             target_duration_s: 120,
             query: Some("Habsburkove".into()),
             pinned_source_prefixes: vec![],
+            content_strategy: None,
+            chapter_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
         assert!(plan.sentences.iter().any(|s| s.text.contains("Habsburk")));
+    }
+
+    #[test]
+    fn across_strategy_diversifies_across_documents() {
+        // Same topic mentioned in two docs — Across mode should surface
+        // hits from both, interleaved, deduped.
+        let mut conn = db::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let p1 = tmp.path().join("dejiny.md");
+        let p2 = tmp.path().join("ekonomie.md");
+        fs::write(&p1, "Hospodarska krize zasahla cely svet. Banky krachovaly. Nezamestnanost rostla rychle.").unwrap();
+        fs::write(&p2, "Velka hospodarska krize byla vlnou poklesu. New Deal reagoval na krizi. Roosevelt byl prezident.").unwrap();
+        ingest::ingest_file(&mut conn, &p1).unwrap();
+        ingest::ingest_file(&mut conn, &p2).unwrap();
+
+        let req = SessionRequest {
+            mode: PracticeMode::Content,
+            alpha: 1.0,
+            target_duration_s: 300,
+            query: Some("hospodarska krize".into()),
+            pinned_source_prefixes: vec![],
+            content_strategy: Some(ContentStrategy::Across),
+            chapter_id: None,
+        };
+        let plan = create_session(&mut conn, 1, &req).unwrap();
+        let sources: std::collections::HashSet<_> = plan
+            .sentences
+            .iter()
+            .filter_map(|s| s.source_path.clone())
+            .collect();
+        assert!(sources.len() >= 2, "Across should pull from multiple docs, got {sources:?}");
+    }
+
+    #[test]
+    fn chapter_strategy_returns_full_section_in_order() {
+        let mut conn = db::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("dejiny.md");
+        fs::write(
+            &p,
+            "# Dejiny 20. stoleti\n\n## Great Depression\n\nPrvni veta sekce o krize. Druha veta o dopadech. Treti veta o reakci vlad.\n\n## Studena valka\n\nOdlisne tema s jinymi vetami.",
+        )
+        .unwrap();
+        ingest::ingest_file(&mut conn, &p).unwrap();
+
+        let doc_id: i64 = conn
+            .query_row("SELECT id FROM document WHERE source_path LIKE '%dejiny.md'", [], |r| r.get(0))
+            .unwrap();
+        let chapter_id = format!("{}::Dejiny 20. stoleti > Great Depression", doc_id);
+
+        let req = SessionRequest {
+            mode: PracticeMode::Content,
+            alpha: 1.0,
+            target_duration_s: 300,
+            query: None,
+            pinned_source_prefixes: vec![],
+            content_strategy: Some(ContentStrategy::Chapter),
+            chapter_id: Some(chapter_id),
+        };
+        let plan = create_session(&mut conn, 1, &req).unwrap();
+        assert_eq!(plan.sentences.len(), 3, "should return all 3 sentences of the Great Depression chapter");
+        assert!(plan.sentences.iter().all(|s| !s.text.contains("Studena valka")));
+    }
+
+    #[test]
+    fn exam_prep_strategy_ranks_chapters_by_aggregate_relevance() {
+        let mut conn = db::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("dejiny.md");
+        fs::write(
+            &p,
+            "# Dejiny\n\n## Great Depression\n\nKrize zasahla USA. Roosevelt reagoval programem New Deal. Banky dostaly podporu.\n\n## Renesance\n\nItalska kultura 15. stoleti. Umeni vzkvetlo. Medici podporovali malire.",
+        )
+        .unwrap();
+        ingest::ingest_file(&mut conn, &p).unwrap();
+
+        let req = SessionRequest {
+            mode: PracticeMode::Content,
+            alpha: 1.0,
+            target_duration_s: 300,
+            query: Some("Great Depression Roosevelt New Deal".into()),
+            pinned_source_prefixes: vec![],
+            content_strategy: Some(ContentStrategy::ExamPrep),
+            chapter_id: None,
+        };
+        let plan = create_session(&mut conn, 1, &req).unwrap();
+        assert!(!plan.sentences.is_empty());
+        // Great Depression chapter should dominate; renaissance content
+        // should be absent or at most trailing.
+        let gd_count = plan.sentences.iter().filter(|s| s.text.contains("Roosevelt") || s.text.contains("Krize") || s.text.contains("Banky")).count();
+        assert!(gd_count >= 2, "expected several GD chapter sentences, got: {:?}",
+            plan.sentences.iter().map(|s| &s.text).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn list_chapters_returns_sections_with_sentence_counts() {
+        let mut conn = db::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("dejiny.md");
+        fs::write(&p, "# A\n\n## B\n\nVeta jedna. Veta dva. Veta tri.\n\n## C\n\nJeste veta. A dalsi.").unwrap();
+        ingest::ingest_file(&mut conn, &p).unwrap();
+        let chapters = list_chapters(&conn).unwrap();
+        assert!(chapters.iter().any(|c| c.section.contains("B") && c.sentence_count >= 3));
+        assert!(chapters.iter().any(|c| c.section.contains("C") && c.sentence_count >= 2));
     }
 
     #[test]
@@ -580,6 +1002,8 @@ mod tests {
             target_duration_s: 60,
             query: None,
             pinned_source_prefixes: vec![],
+            content_strategy: None,
+            chapter_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -594,6 +1018,8 @@ mod tests {
             target_duration_s: 30,
             query: None,
             pinned_source_prefixes: vec![],
+            content_strategy: None,
+            chapter_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         let n: i64 = conn

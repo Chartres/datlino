@@ -3,9 +3,13 @@
   import { api } from '$lib/api';
   import { modes } from '$lib/mode-meta';
   import { currentSession } from '$lib/session-store.svelte';
-  import type { PracticeMode } from '$lib/types';
+  import type { ChapterInfo, ContentStrategy, PracticeMode } from '$lib/types';
 
   let selected = $state<PracticeMode>('content');
+  let contentStrategy = $state<ContentStrategy>('across');
+  let chapters = $state<ChapterInfo[]>([]);
+  let chapterId = $state<string>('');
+
   let alpha = $state(0.7);
   let duration = $state(300); // seconds
   let query = $state('');
@@ -14,20 +18,49 @@
 
   const meta = $derived(modes.find((m) => m.code === selected)!);
 
+  $effect(() => {
+    // Load chapters once so the Chapter strategy has something to pick.
+    api
+      .listChapters()
+      .then((c) => (chapters = c))
+      .catch(() => {});
+  });
+
+  const chaptersByDoc = $derived(() => {
+    const groups = new Map<string, ChapterInfo[]>();
+    for (const c of chapters) {
+      const key = shortDocName(c.source_path);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(c);
+    }
+    return groups;
+  });
+
+  function shortDocName(path: string): string {
+    const parts = path.split(/[\\/]/);
+    return parts[parts.length - 1].replace(/\.(md|markdown|txt)$/i, '');
+  }
+
   async function startSession() {
     busy = true;
     error = null;
     try {
+      const isContent = selected === 'content';
       const plan = await api.createSession({
         mode: selected,
-        alpha: meta.supportsAlpha ? alpha : selected === 'content' ? 1.0 : 0.0,
+        alpha: meta.supportsAlpha ? alpha : isContent ? 1.0 : 0.0,
         target_duration_s: duration,
-        query: meta.supportsQuery && query.trim() ? query.trim() : undefined,
-        pinned_source_prefixes: []
+        query:
+          (isContent && contentStrategy !== 'chapter') || meta.supportsQuery
+            ? query.trim() || undefined
+            : undefined,
+        pinned_source_prefixes: [],
+        content_strategy: isContent ? contentStrategy : undefined,
+        chapter_id:
+          isContent && contentStrategy === 'chapter' && chapterId ? chapterId : undefined
       });
       if (!plan.sentences.length) {
-        error =
-          'Pro tento mód není dost materiálu. Zkus přidat složku s poznámkami nebo vyber Diakritiku.';
+        error = explainEmpty(selected, contentStrategy);
         return;
       }
       currentSession.plan = plan;
@@ -38,6 +71,19 @@
     } finally {
       busy = false;
     }
+  }
+
+  function explainEmpty(
+    mode: PracticeMode,
+    strat: ContentStrategy
+  ): string {
+    if (mode === 'content' && strat === 'chapter') {
+      return 'Vyber kapitolu ze seznamu. Pokud žádná není, přidej složku s Markdown soubory obsahujícími nadpisy (#, ##).';
+    }
+    if (mode === 'content') {
+      return 'Pro tento dotaz jsme nic nenašli. Zkus jiné klíčové slovo nebo přepni na jinou strategii.';
+    }
+    return 'Pro tento mód není dost materiálu. Zkus přidat složku s poznámkami.';
   }
 </script>
 
@@ -63,6 +109,47 @@
     {/each}
   </div>
 </section>
+
+{#if selected === 'content'}
+  <section class="sub-strategy">
+    <h3>Jak vybíráme obsah?</h3>
+    <div class="strategies">
+      <button
+        type="button"
+        class="strategy"
+        class:active={contentStrategy === 'across'}
+        onclick={() => (contentStrategy = 'across')}
+      >
+        <strong>Napříč materiály</strong>
+        <span>Věty zmiňující tvé téma ze všech dokumentů — propojuje znalosti.</span>
+      </button>
+      <button
+        type="button"
+        class="strategy"
+        class:active={contentStrategy === 'chapter'}
+        onclick={() => (contentStrategy = 'chapter')}
+      >
+        <strong>Celá kapitola</strong>
+        <span>Všechny věty jedné kapitoly po sobě — pro ucelené čtení.</span>
+      </button>
+      <button
+        type="button"
+        class="strategy"
+        class:active={contentStrategy === 'exam_prep'}
+        onclick={() => (contentStrategy = 'exam_prep')}
+      >
+        <strong>Příprava na zkoušku</strong>
+        <span>Popiš, z čeho budeš zkoušený, dostaneš klíčové kapitoly.</span>
+      </button>
+    </div>
+    {#if contentStrategy === 'exam_prep'}
+      <p class="note">
+        Zatím používáme klíčová slova. S embeddings (Týden 2) se přesnost
+        dramaticky zvýší — i skryté souvislosti najdeme.
+      </p>
+    {/if}
+  </section>
+{/if}
 
 <section>
   <h3>Nastavení</h3>
@@ -99,12 +186,42 @@
     </div>
   {/if}
 
-  {#if meta.supportsQuery}
+  {#if selected === 'content' && contentStrategy === 'chapter'}
     <div class="row">
-      <label>Co by tě zajímalo? (volitelné)
+      <label>Kapitola
+        <select bind:value={chapterId}>
+          <option value="">— vyber kapitolu —</option>
+          {#each [...chaptersByDoc()] as [docName, docChapters]}
+            <optgroup label={docName}>
+              {#each docChapters as ch}
+                <option value={ch.id}>
+                  {ch.section} · {ch.sentence_count} vět
+                </option>
+              {/each}
+            </optgroup>
+          {/each}
+        </select>
+      </label>
+      {#if chapters.length === 0}
+        <p class="muted small">
+          Žádné kapitoly. Markdown soubor musí mít nadpisy (<code># …</code> nebo
+          <code>## …</code>).
+        </p>
+      {/if}
+    </div>
+  {:else if (selected === 'content' && contentStrategy !== 'chapter') || meta.supportsQuery}
+    <div class="row">
+      <label>
+        {#if selected === 'content' && contentStrategy === 'exam_prep'}
+          Co budeš zkoušený?
+        {:else}
+          Co by tě zajímalo? (volitelné)
+        {/if}
         <input
           type="text"
-          placeholder="např. Habsburkové, derivace, perfektum…"
+          placeholder={selected === 'content' && contentStrategy === 'exam_prep'
+            ? 'např. "Great Depression a New Deal, Roosevelt, americká politika 30. let"'
+            : 'např. Habsburkové, derivace, perfektum…'}
           bind:value={query}
         />
       </label>
@@ -135,6 +252,9 @@
     color: #78716c;
     margin-top: 0;
   }
+  .small {
+    font-size: 0.8rem;
+  }
 
   .modes {
     display: grid;
@@ -142,7 +262,6 @@
     gap: 0.75rem;
     margin-top: 1rem;
   }
-
   .mode {
     text-align: left;
     padding: 1rem;
@@ -179,6 +298,47 @@
     font-style: italic;
   }
 
+  .sub-strategy {
+    padding: 1rem 1.25rem;
+    background: rgba(179, 39, 31, 0.04);
+    border: 1px solid rgba(179, 39, 31, 0.15);
+    border-radius: 8px;
+  }
+  .strategies {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.5rem;
+  }
+  .strategy {
+    text-align: left;
+    padding: 0.75rem;
+    border: 1px solid rgba(28, 25, 23, 0.1);
+    background: #fffaf2;
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .strategy.active {
+    border-color: #b3271f;
+    background: rgba(179, 39, 31, 0.08);
+  }
+  .strategy strong {
+    display: block;
+    margin-bottom: 0.2rem;
+    color: #b3271f;
+    font-size: 0.92rem;
+  }
+  .strategy span {
+    font-size: 0.82rem;
+    color: #57534e;
+  }
+  .note {
+    margin: 0.75rem 0 0;
+    font-size: 0.8rem;
+    color: #78716c;
+    font-style: italic;
+  }
+
   .row {
     margin: 0.75rem 0;
   }
@@ -197,7 +357,6 @@
     font: inherit;
     background: #fffaf2;
   }
-
   .alpha {
     margin: 1rem 0;
     padding: 1rem;
@@ -231,5 +390,11 @@
   }
   .error {
     color: #b3271f;
+  }
+  code {
+    background: rgba(28, 25, 23, 0.05);
+    padding: 0.05rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.85rem;
   }
 </style>

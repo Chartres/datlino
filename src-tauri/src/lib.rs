@@ -145,6 +145,14 @@ fn get_weak_ngrams(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn list_chapters(
+    state: State<'_, AppState>,
+) -> std::result::Result<Vec<session::ChapterInfo>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    session::list_chapters(&conn).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -176,6 +184,7 @@ pub fn run() {
             get_profile,
             get_history,
             get_weak_ngrams,
+            list_chapters,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Datlino");

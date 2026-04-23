@@ -31,6 +31,13 @@ pub struct Sentence {
     /// The paragraph (or list item) the sentence belongs to. Used for
     /// provenance/recall when the typing UI wants to show context.
     pub context: String,
+    /// Markdown section path ("Habsburkové > Stavovské povstání"). Empty
+    /// string if the sentence is at document root before any header.
+    pub section: String,
+    /// True when this sentence *is* a header line (`#`, `##`, …). Heading
+    /// chunks are useful for chapter navigation but typically skipped when
+    /// building a typing session.
+    pub is_heading: bool,
 }
 
 /// Lowercased word stems that carry a trailing period without ending a
@@ -66,9 +73,17 @@ static ROMAN_NUMERAL: Lazy<Regex> =
 
 /// Markdown line prefix patterns we strip before scanning prose. Each
 /// pattern captures the markup so we can advance the byte offset accordingly.
+/// Handles ASCII markdown bullets (`- * +`), Unicode bullets often pasted
+/// from Word / PDFs / OCR output (`• ● ◦ ‣ ▪ ○ □ ◇ ◆ – —`), and numbered
+/// markers (`1.`, `1)`, `a)`).
 static LIST_MARKER: Lazy<Regex> = Lazy::new(|| {
-    // -, *, +, then space; or 1. / 1) / a) / a. with a digit/letter run
-    Regex::new(r"^([\-\*\+]\s+|\d+[\.\)]\s+|[a-zA-Zá-ž]\)\s+)").unwrap()
+    // ASCII markers require whitespace after them so we don't eat a `-` in
+    // the middle of a word. Unicode bullets tolerate missing whitespace
+    // because OCR often glues them onto the first word.
+    Regex::new(
+        r"^(?:[\-\*\+]\s+|[\u{2022}\u{25CF}\u{25E6}\u{2023}\u{25AA}\u{25CB}\u{25A1}\u{25C7}\u{25C6}\u{2013}\u{2014}]\s*|\d+[\.\)]\s+|[a-zA-Z\u{00E1}-\u{017E}]\)\s+)",
+    )
+    .unwrap()
 });
 
 static HEADER_MARKER: Lazy<Regex> =
@@ -81,17 +96,23 @@ static BLOCKQUOTE_MARKER: Lazy<Regex> =
 pub fn segment(source: &str) -> Vec<Sentence> {
     let normalised: String = source.nfc().collect();
     let mut out = Vec::new();
+    // Header stack: index = depth-1, value = header title at that depth.
+    let mut section_stack: Vec<String> = Vec::new();
 
     for paragraph in iter_paragraphs(&normalised) {
-        // Decide if the paragraph is structured (list / header / quote).
-        // Each *line* gets stripped of its marker, then scanned as prose.
         for line in iter_lines(&paragraph) {
             let mut local_offset = line.byte_offset;
             let mut body = line.text.as_str();
+            let mut is_heading = false;
 
             if let Some(m) = HEADER_MARKER.find(body) {
+                // Depth = number of leading `#` characters.
+                let depth = body[..m.end()].chars().filter(|c| *c == '#').count();
                 local_offset += m.end();
                 body = &body[m.end()..];
+                let title = body.trim_end().to_string();
+                update_section_stack(&mut section_stack, depth, title);
+                is_heading = true;
             } else if let Some(m) = LIST_MARKER.find(body) {
                 local_offset += m.end();
                 body = &body[m.end()..];
@@ -105,11 +126,39 @@ pub fn segment(source: &str) -> Vec<Sentence> {
                 continue;
             }
 
+            let section = section_path(&section_stack);
+            let before = out.len();
             scan_prose(body, local_offset, &paragraph.text, &mut out);
+            // Stamp section + heading flag on every sentence this line produced.
+            for s in &mut out[before..] {
+                s.section = section.clone();
+                s.is_heading = is_heading;
+            }
         }
     }
 
     out
+}
+
+fn update_section_stack(stack: &mut Vec<String>, depth: usize, title: String) {
+    let depth = depth.max(1);
+    // Any deeper levels become stale; truncate.
+    stack.truncate(depth - 1);
+    // Pad with empties so index-by-depth stays consistent when a deeper
+    // header appears before the shallower one (rare but possible).
+    while stack.len() < depth - 1 {
+        stack.push(String::new());
+    }
+    stack.push(title);
+}
+
+fn section_path(stack: &[String]) -> String {
+    stack
+        .iter()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" > ")
 }
 
 #[derive(Debug)]
@@ -378,6 +427,8 @@ fn push_sentence(
         text: trimmed.to_string(),
         byte_offset: base_offset + start + leading_ws,
         context: context.trim().to_string(),
+        section: String::new(),
+        is_heading: false,
     });
 }
 
@@ -462,6 +513,25 @@ mod tests {
     }
 
     #[test]
+    fn unicode_bullet_markers_are_stripped() {
+        // Common bullets students paste from Word / Notion / PDF exports.
+        let src = "• První bod\n● Druhý bod\n◦ Třetí bod\n– Čtvrtý bod";
+        let s = segment(src);
+        assert_eq!(
+            texts(&s),
+            vec!["První bod", "Druhý bod", "Třetí bod", "Čtvrtý bod"]
+        );
+    }
+
+    #[test]
+    fn unicode_bullet_without_trailing_space_is_stripped() {
+        // Some OCR output glues the bullet to the first word.
+        let src = "●Velká hospodářská krize (1929)";
+        let s = segment(src);
+        assert_eq!(texts(&s), vec!["Velká hospodářská krize (1929)"]);
+    }
+
+    #[test]
     fn numbered_list_with_multi_sentence_items() {
         let src = "1. První věta. Druhá věta.\n2. Třetí věta.";
         let s = segment(src);
@@ -532,6 +602,21 @@ mod tests {
     fn header_becomes_a_sentence_without_period() {
         let s = segment("# Habsburkové\n\nVládli v Čechách.");
         assert_eq!(texts(&s), vec!["Habsburkové", "Vládli v Čechách."]);
+    }
+
+    #[test]
+    fn headers_become_section_paths_on_following_sentences() {
+        let src = "# Dějepis\n\nIntro věta.\n\n## Habsburkové\n\nVládli.\n\n## Lucemburkové\n\nTaké vládli.";
+        let s = segment(src);
+        let header = s.iter().find(|x| x.text == "Dějepis").unwrap();
+        assert!(header.is_heading);
+        let intro = s.iter().find(|x| x.text == "Intro věta.").unwrap();
+        assert_eq!(intro.section, "Dějepis");
+        assert!(!intro.is_heading);
+        let hab = s.iter().find(|x| x.text == "Vládli.").unwrap();
+        assert_eq!(hab.section, "Dějepis > Habsburkové");
+        let luc = s.iter().find(|x| x.text == "Také vládli.").unwrap();
+        assert_eq!(luc.section, "Dějepis > Lucemburkové");
     }
 
     #[test]

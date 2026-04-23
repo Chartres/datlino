@@ -5,12 +5,24 @@ export type PracticeMode =
   | 'weak_keys'
   | 'hybrid';
 
+export type ContentStrategy = 'across' | 'chapter' | 'exam_prep';
+
 export type SessionRequest = {
   mode: PracticeMode;
   alpha: number;
   target_duration_s: number;
   query?: string;
   pinned_source_prefixes?: string[];
+  content_strategy?: ContentStrategy;
+  chapter_id?: string;
+};
+
+export type ChapterInfo = {
+  id: string;
+  document_id: number;
+  source_path: string;
+  section: string;
+  sentence_count: number;
 };
 
 export type SessionSentence = {

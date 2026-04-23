@@ -91,8 +91,8 @@ pub fn ingest_file(conn: &mut Connection, path: &Path) -> Result<bool> {
     let sentences = segmenter::segment(&raw);
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO chunk(document_id, text, char_offset, context, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO chunk(document_id, text, char_offset, context, created_at, section, is_heading)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
         let now = now_unix();
         for s in &sentences {
@@ -102,6 +102,8 @@ pub fn ingest_file(conn: &mut Connection, path: &Path) -> Result<bool> {
                 s.byte_offset as i64,
                 &s.context,
                 now,
+                &s.section,
+                s.is_heading as i64,
             ])?;
         }
     }

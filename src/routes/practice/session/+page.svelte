@@ -31,6 +31,34 @@
   const targetChars = $derived(Array.from(target)); // codepoints
   const totalSentences = $derived(plan?.sentences.length ?? 0);
 
+  // Group chars into words + space markers so wrap happens at spaces and
+  // long passages read like prose. Each `word` group is rendered as an
+  // inline-block unit; each `space` group is a break point.
+  type Group =
+    | { kind: 'word'; indices: number[]; key: string }
+    | { kind: 'space'; indices: number[]; key: string };
+  const wordGroups = $derived.by<Group[]>(() => {
+    const out: Group[] = [];
+    let current: number[] = [];
+    targetChars.forEach((ch, i) => {
+      if (ch === ' ') {
+        if (current.length) {
+          out.push({ kind: 'word', indices: current, key: `w${current[0]}` });
+          current = [];
+        }
+        out.push({ kind: 'space', indices: [i], key: `s${i}` });
+      } else {
+        current.push(i);
+      }
+    });
+    if (current.length) {
+      out.push({ kind: 'word', indices: current, key: `w${current[0]}` });
+    }
+    return out;
+  });
+
+  let surfaceEl = $state<HTMLElement | null>(null);
+
   // Initialise / reset per-sentence state whenever the target changes.
   $effect(() => {
     if (!target) return;
@@ -40,6 +68,21 @@
     attemptStart = performance.now();
     if (sessionStart === null) sessionStart = attemptStart;
     lastKeyTime = attemptStart;
+    // Scroll long passages back to the top when a new sentence starts.
+    if (surfaceEl) surfaceEl.scrollTop = 0;
+  });
+
+  // Keep the active character visible as the cursor advances through a
+  // long chapter passage that wraps past the viewport.
+  $effect(() => {
+    if (!surfaceEl) return;
+    void cursor;
+    queueMicrotask(() => {
+      const el = surfaceEl?.querySelector<HTMLElement>(`[data-char-index="${cursor}"]`);
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    });
   });
 
   // --- Live stats ---
@@ -213,22 +256,30 @@
     </div>
   </div>
 
-  <div class="typing-surface" role="presentation">
-    {#each targetChars as ch, i}
-      {#if ch === ' '}
+  <div class="typing-surface" role="presentation" bind:this={surfaceEl}>
+    {#each wordGroups as group (group.key)}
+      {#if group.kind === 'word'}
+        <span class="word">
+          {#each group.indices as i}
+            <span
+              class="char"
+              class:correct={typed[i] === targetChars[i]}
+              class:wrong={typed[i] !== null && typed[i] !== targetChars[i]}
+              class:cursor={i === cursor}
+              data-char-index={i}
+            >{targetChars[i]}</span>
+          {/each}
+        </span>
+      {:else}
+        {@const i = group.indices[0]}
         <span
           class="char space"
-          class:correct={typed[i] === ch}
-          class:wrong={typed[i] !== null && typed[i] !== ch}
+          class:correct={typed[i] === targetChars[i]}
+          class:wrong={typed[i] !== null && typed[i] !== targetChars[i]}
           class:cursor={i === cursor}
-        > </span>
-      {:else}
-        <span
-          class="char"
-          class:correct={typed[i] === ch}
-          class:wrong={typed[i] !== null && typed[i] !== ch}
-          class:cursor={i === cursor}
-        >{ch}</span>
+          aria-label="mezera"
+          data-char-index={i}
+        >·</span>
       {/if}
     {/each}
   </div>
@@ -297,18 +348,32 @@
     border-radius: 8px;
     padding: 2rem 2rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, 'Cascadia Mono', monospace;
-    font-size: 1.6rem;
-    line-height: 2.1rem;
+    font-size: 1.5rem;
+    line-height: 2.2rem;
     letter-spacing: 0.02em;
     color: #a8a29e;
-    word-break: break-word;
     min-height: 6rem;
+    /* Cap so a full chapter stays readable; cursor auto-scrolls into view. */
+    max-height: 50vh;
+    overflow-y: auto;
     user-select: none;
+    /* Word groups are inline-block so they break between words, not
+       mid-word — keeps long passages readable. */
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  .word {
+    display: inline-block;
+    white-space: nowrap;
   }
 
   .char {
     position: relative;
     transition: color 80ms ease;
+    display: inline-block;
+    min-width: 0.55em;
+    text-align: center;
   }
   .char.correct {
     color: #1c1917;
@@ -318,11 +383,17 @@
     background: #b3271f;
     border-radius: 2px;
   }
+  /* Render a muted mid-dot in place of the space so students can see where
+     the gap belongs. Still correct when they press the actual space bar. */
   .char.space {
-    white-space: pre;
+    color: rgba(28, 25, 23, 0.18);
+  }
+  .char.space.correct {
+    color: rgba(28, 25, 23, 0.18);
   }
   .char.space.wrong {
-    background: rgba(179, 39, 31, 0.6);
+    color: #fffaf2;
+    background: rgba(179, 39, 31, 0.7);
   }
   .char.cursor {
     /* Woodpecker-red caret */

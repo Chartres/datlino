@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import type {
   AttemptRecord,
+  ChapterInfo,
   IndexStatus,
   SearchHit,
   SessionHistoryRow,
@@ -36,6 +37,7 @@ export const api = {
   getHistory: (limit = 20) => invoke<SessionHistoryRow[]>('get_history', { limit }),
   getWeakNgrams: (limit = 20) =>
     invoke<WeakNgram[]>('get_weak_ngrams', { limit }),
+  listChapters: () => invoke<ChapterInfo[]>('list_chapters'),
 
   // native dialog
   pickFolder: async (): Promise<string | null> => {

@@ -140,6 +140,13 @@ const MIGRATIONS: &[&str] = &[
         UNIQUE (user_id, code)
     );
     "#,
+    // 0003 — section (chapter) awareness on chunks for chapter / exam-prep
+    // content strategies. `section` is a breadcrumb like "Dějepis > Habsburkové".
+    r#"
+    ALTER TABLE chunk ADD COLUMN section TEXT NOT NULL DEFAULT '';
+    ALTER TABLE chunk ADD COLUMN is_heading INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX IF NOT EXISTS idx_chunk_section ON chunk(document_id, section);
+    "#,
 ];
 
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
