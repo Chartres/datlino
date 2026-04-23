@@ -1,9 +1,12 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { api } from '$lib/api';
+  import Keyboard from '$lib/Keyboard.svelte';
   import { currentSession } from '$lib/session-store.svelte';
   import { refreshProfile } from '$lib/profile.svelte';
   import type { AttemptRecord, Keystroke } from '$lib/types';
+
+  let showKeyboard = $state(true);
 
   const plan = $derived(currentSession.plan);
 
@@ -116,17 +119,24 @@
   );
 
   // --- Key handling ---
+  //
+  // Dead-key diacritics (e.g. `ř` typed as AltGr+= then r on CZ layouts)
+  // fire a `keydown` with `key === "Dead"` that resolves to the composed
+  // character via `compositionend`. If we treated the `Dead` keypress as
+  // "wrong character", every ř/č/š would look like a two-key failure.
+  // So: skip keys during composition, skip the literal "Dead" key, and
+  // hand composed text to `acceptChar` via the compositionend handler.
   function handleKey(ev: KeyboardEvent) {
     if (!target) return;
     if (submitting) return;
 
     // Let browser shortcuts pass through.
-    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (ev.metaKey || ev.ctrlKey) return;
     if (ev.key === 'Tab') return;
 
     if (ev.key === 'Escape') {
       ev.preventDefault();
-      finishSession(); // gives up early, still records what was typed
+      finishSession();
       return;
     }
 
@@ -139,41 +149,56 @@
       return;
     }
 
+    // Dead-key pass-through — we wait for the final composed char.
+    if (ev.key === 'Dead' || ev.isComposing || ev.keyCode === 229) return;
+
     // Single-char keys only. Modifier keys like Shift alone produce `.key`
-    // with names we ignore here.
+    // with multi-char names (Shift, Control, Meta, ...) and get ignored.
     const ch = ev.key;
     if (ch.length !== 1 && ch !== 'Enter') return;
-    ev.preventDefault();
 
+    // Alt / Option held down with a letter is often used for diacritic
+    // composition on macOS layouts — leave it to the IME and wait for
+    // compositionend.
+    if (ev.altKey) return;
+
+    ev.preventDefault();
+    acceptChar(ch === 'Enter' ? '\n' : ch);
+  }
+
+  function handleCompositionEnd(ev: CompositionEvent) {
+    if (!target || submitting) return;
+    const data = ev.data;
+    if (!data) return;
+    // compositionend can deliver one codepoint (CZ dead key → ř) or
+    // several (some CJK IMEs); we iterate to be safe.
+    for (const ch of Array.from(data)) {
+      acceptChar(ch);
+    }
+  }
+
+  function acceptChar(ch: string) {
     if (cursor >= targetChars.length) {
-      // Enter after completing the sentence advances.
-      if (ch === 'Enter' || ch === ' ') {
+      if (ch === '\n' || ch === ' ') {
         advanceSentence();
       }
       return;
     }
-
     const expected = targetChars[cursor] ?? '';
-    const actual = ch === 'Enter' ? '\n' : ch;
     const now = performance.now();
     const tRel = now - attemptStart;
-
-    const correct = actual === expected;
-    typed[cursor] = actual;
-
+    const correct = ch === expected;
+    typed[cursor] = ch;
     currentAttemptKeystrokes.push({
       t_ms: Math.round(tRel),
-      actual,
+      actual: ch,
       expected,
       correct
     });
     cursor += 1;
     lastKeyTime = now;
 
-    // Sentence complete?
     if (cursor === targetChars.length) {
-      // Tiny pause feels nicer than instant flip; require another press
-      // (Space/Enter) only if there's an error, so perfect runs flow.
       const perfect = typed.every((c, i) => c === targetChars[i]);
       if (perfect) advanceSentence();
     }
@@ -230,7 +255,7 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKey} />
+<svelte:window onkeydown={handleKey} oncompositionend={handleCompositionEnd} />
 
 {#if plan}
   <div class="hud">
@@ -251,6 +276,14 @@
       <span class="value">{Math.floor(elapsedMs / 1000)} s</span>
     </div>
     <div class="actions">
+      <button
+        type="button"
+        onclick={() => (showKeyboard = !showKeyboard)}
+        disabled={submitting}
+        title="Zobraz / skryj hint s prsty"
+      >
+        {showKeyboard ? 'Skrýt klávesnici' : 'Zobrazit klávesnici'}
+      </button>
       <button type="button" onclick={skipSentence} disabled={submitting}>Přeskočit</button>
       <button type="button" onclick={finishSession} disabled={submitting}>Ukončit</button>
     </div>
@@ -288,6 +321,12 @@
     <p class="source">📄 {plan.sentences[sentenceIndex]?.source_path}</p>
   {:else if plan.sentences[sentenceIndex]?.is_generated}
     <p class="source">✦ Generovaný drill</p>
+  {/if}
+
+  {#if showKeyboard}
+    <div class="keyboard-wrap">
+      <Keyboard nextChar={targetChars[cursor] ?? null} />
+    </div>
   {/if}
 
   {#if plan.sentences[sentenceIndex]?.source_text}
@@ -445,5 +484,8 @@
     margin: 0.5rem 0 0;
     color: #57534e;
     font-family: ui-monospace, monospace;
+  }
+  .keyboard-wrap {
+    margin-top: 1rem;
   }
 </style>

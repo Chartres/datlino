@@ -402,6 +402,42 @@ mod tests {
     }
 
     #[test]
+    fn ingest_tree_goes_deep_into_nested_subfolders() {
+        let mut conn = db::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        // Typical student folder: subjects → chapters → files, with Czech
+        // directory names and depth > 2.
+        write_file(tmp.path(), "dejepis/habsburkove/obsah.md", "Habsburkové vládli v Čechách.");
+        write_file(
+            tmp.path(),
+            "biologie/bunecna/fotosynteza.md",
+            "Fotosyntéza přeměňuje světlo na energii.",
+        );
+        write_file(
+            tmp.path(),
+            "cestina/literatura/19_stoleti/macha.txt",
+            "Máj je romantická báseň.",
+        );
+        // And make sure hidden dirs / build artifacts stay skipped.
+        write_file(tmp.path(), ".git/HEAD", "not a real note");
+        write_file(tmp.path(), "node_modules/pkg/readme.md", "not a note");
+
+        let stats = ingest_tree(&mut conn, tmp.path()).unwrap();
+        assert_eq!(stats.files_seen, 3, "every real file found across nested dirs");
+        assert_eq!(stats.files_ingested, 3);
+        let paths: Vec<String> = conn
+            .prepare("SELECT source_path FROM document ORDER BY source_path")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(paths.iter().any(|p| p.contains("habsburkove")));
+        assert!(paths.iter().any(|p| p.contains("bunecna")));
+        assert!(paths.iter().any(|p| p.contains("19_stoleti")));
+    }
+
+    #[test]
     fn clean_pdf_text_joins_soft_wraps_but_keeps_paragraphs() {
         let raw = "Velka hospodarska krize\nzacala v roce 1929.\n\nBanky\nkrachovaly po cele zemi.";
         let got = clean_pdf_text(raw);

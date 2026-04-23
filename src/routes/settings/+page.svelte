@@ -6,6 +6,7 @@
   let cohereKey = $state('');
   let anthropicKey = $state('');
   let anthropicPresent = $state(false);
+  let anthropicEnvKey = $state<string | null>(null);
   let ocr = $state<{ tesseract: boolean; pdftoppm: boolean; available: boolean } | null>(
     null
   );
@@ -22,10 +23,11 @@
 
   async function refresh() {
     try {
-      [status, ocr, anthropicPresent] = await Promise.all([
+      [status, ocr, anthropicPresent, anthropicEnvKey] = await Promise.all([
         api.getEmbeddingStatus(),
         api.getOcrStatus(),
-        api.anthropicKeyPresent()
+        api.anthropicKeyPresent(),
+        api.detectAnthropicEnvKey()
       ]);
       error = null;
     } catch (e) {
@@ -45,6 +47,31 @@
     } finally {
       savingAnth = false;
     }
+  }
+
+  async function importEnvKey() {
+    if (!anthropicEnvKey) return;
+    savingAnth = true;
+    try {
+      await api.setAnthropicApiKey(anthropicEnvKey);
+      await refresh();
+      message =
+        'Klíč z proměnné prostředí ANTHROPIC_API_KEY uložen do klíčenky.';
+    } catch (e) {
+      error = String(e);
+    } finally {
+      savingAnth = false;
+    }
+  }
+
+  function openConsole() {
+    // Tauri's webview supports window.open() for external URLs — no plugin
+    // required for a simple "open in system browser" link.
+    window.open('https://console.anthropic.com/settings/keys', '_blank');
+  }
+
+  function openCohereDashboard() {
+    window.open('https://dashboard.cohere.com/api-keys', '_blank');
   }
 
   async function saveKey() {
@@ -192,6 +219,11 @@
         <br /><strong>Aktuálně uložen.</strong> Nový klíč ho přepíše, prázdné pole ho smaže.
       {/if}
     </p>
+    <div class="login-row">
+      <button class="secondary" onclick={openCohereDashboard}>
+        Otevřít Cohere Dashboard →
+      </button>
+    </div>
     <form
       onsubmit={(e) => {
         e.preventDefault();
@@ -246,12 +278,36 @@
     obsahovaly tvé aktuálně slabé kombinace kláves. Implementace Claude API
     (model <code>claude-haiku-4-5</code>). Klíč se ukládá do klíčenky
     operačního systému. Před použitím každé rephrase se porovná podobnost
-    s původní větou; drift > 15 % se zahazuje.
+    s původní větou; drift &gt; 15 % se zahazuje.
     {#if anthropicPresent}
       <br /><strong>Anthropic klíč uložen.</strong> Režim lze zapnout u
       každého sezení zvlášť.
     {/if}
   </p>
+
+  {#if anthropicEnvKey && !anthropicPresent}
+    <div class="suggestion">
+      <span>
+        ✨ Našli jsme <code>ANTHROPIC_API_KEY</code> v proměnných prostředí.
+        Můžeš ho importovat jedním klikem:
+      </span>
+      <button class="secondary" onclick={importEnvKey} disabled={savingAnth}>
+        Importovat
+      </button>
+    </div>
+  {/if}
+
+  <div class="login-row">
+    <button class="secondary" onclick={openConsole}>
+      Otevřít Anthropic Console →
+    </button>
+    <span class="muted small">
+      Sign-in with Claude vyžaduje registraci Datlina jako OAuth aplikace
+      u Anthropic — zatím nejjednodušší cesta je přihlásit se do Console,
+      vytvořit klíč a vložit ho dolů.
+    </span>
+  </div>
+
   <form
     onsubmit={(e) => {
       e.preventDefault();
@@ -409,5 +465,31 @@
     padding: 0.05rem 0.3rem;
     border-radius: 3px;
     font-size: 0.85rem;
+  }
+  .suggestion {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(179, 39, 31, 0.04);
+    border: 1px solid rgba(179, 39, 31, 0.15);
+    border-radius: 6px;
+    margin: 0.5rem 0;
+    font-size: 0.85rem;
+    color: #44403c;
+  }
+  .suggestion code {
+    font-size: 0.8rem;
+  }
+  .login-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0.5rem 0;
+    flex-wrap: wrap;
+  }
+  .login-row .muted {
+    flex: 1;
+    margin: 0;
   }
 </style>

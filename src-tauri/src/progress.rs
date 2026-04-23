@@ -20,6 +20,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::db::now_unix;
+use crate::lessons;
 use crate::pedagogy::{self, Keystroke};
 
 /// One recorded attempt. The frontend sends this verbatim at session end.
@@ -31,6 +32,18 @@ pub struct AttemptRecord {
     pub finished_at_ms: u64,
     pub keystrokes: Vec<Keystroke>,
     pub completed: bool,
+}
+
+/// When a Lesson session meets its target bar, we stamp it here so the
+/// next lesson unlocks. `lesson_mastered_this_session` is the id the
+/// student just passed (if any) and surfaces on the summary screen.
+#[derive(Debug, Clone, Serialize)]
+pub struct LessonProgressRow {
+    pub lesson_id: String,
+    pub first_passed_at: Option<i64>,
+    pub best_wpm: f64,
+    pub best_accuracy: f64,
+    pub attempts: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +62,14 @@ pub struct SessionSummary {
     pub sentences_attempted: i64,
     pub badges_awarded: Vec<String>,
     pub weak_preview: Vec<pedagogy::WeakNgram>,
+    /// Populated when the session was an IntroLesson and the student just
+    /// crossed the lesson's mastery bar this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lesson_mastered: Option<String>,
+    /// Populated whenever IntroLesson progress advanced (even without
+    /// full mastery) so the UI can show "nová série na lekci X".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lesson_progress: Option<LessonProgressRow>,
 }
 
 pub fn finalize_session(
@@ -154,6 +175,10 @@ pub fn finalize_session(
         wpm,
     )?;
 
+    // --- 4b. Intro lesson progress (only for IntroLesson sessions) ---
+    let (lesson_mastered, lesson_progress) =
+        update_intro_lesson_progress(conn, user_id, session_id, attempts, wpm, accuracy_pct)?;
+
     // --- 5. Write summary + finalise session row ---
     let weak_preview = pedagogy::weak_ngrams(conn, user_id, 5)?;
     let level = level_for_xp(total_xp);
@@ -172,6 +197,8 @@ pub fn finalize_session(
         sentences_attempted: attempts.len() as i64,
         badges_awarded,
         weak_preview,
+        lesson_mastered,
+        lesson_progress,
     };
     let summary_json = serde_json::to_string(&summary)?;
     conn.execute(
@@ -254,6 +281,174 @@ fn streak_after(prev: &Profile, today: NaiveDate) -> i64 {
         1 => prev.current_streak + 1,
         _ => 1,
     }
+}
+
+/// Update `intro_lesson_progress` when this session was an IntroLesson.
+/// Bumps attempts, tracks personal best WPM/accuracy, and stamps
+/// `first_passed_at` the first time the lesson's target bar is cleared.
+fn update_intro_lesson_progress(
+    conn: &rusqlite::Connection,
+    user_id: i64,
+    session_id: i64,
+    attempts: &[AttemptRecord],
+    wpm: f64,
+    accuracy_pct: f64,
+) -> Result<(Option<String>, Option<LessonProgressRow>)> {
+    let mode: String = conn
+        .query_row(
+            "SELECT mode FROM session WHERE id = ?1",
+            rusqlite::params![session_id],
+            |r| r.get(0),
+        )
+        .unwrap_or_default();
+    if mode != "intro_lesson" {
+        return Ok((None, None));
+    }
+    // Each attempt.target_text came out of a lesson generator; the
+    // session.pinned_sources / sentences carry the lesson id in
+    // source_path (lesson://<id>). Recover it from the first attempt by
+    // walking back to the source_path stored on the session's attempts
+    // via target_text — actually we only persist target_text. Easier:
+    // read the lesson id out of the first attempt whose chunk_id is
+    // NULL and source_path-style marker lives in session row. For MVP,
+    // scan curriculum drills for an exact match with the first attempt.
+    let Some(first) = attempts.first() else {
+        return Ok((None, None));
+    };
+    let lesson_id: Option<String> =
+        lessons::curriculum().into_iter().find_map(|lesson| {
+            let drills = (lesson.drills)();
+            if drills.iter().any(|d| d.text == first.target_text) {
+                Some(lesson.meta.id.to_string())
+            } else {
+                None
+            }
+        });
+    let Some(lesson_id) = lesson_id else {
+        return Ok((None, None));
+    };
+    let Some(lesson) = lessons::lesson_by_id(&lesson_id) else {
+        return Ok((None, None));
+    };
+
+    // Upsert the row.
+    conn.execute(
+        "INSERT INTO intro_lesson_progress(user_id, lesson_id, best_wpm, best_accuracy, attempts)
+         VALUES (?1, ?2, ?3, ?4, 1)
+         ON CONFLICT(user_id, lesson_id) DO UPDATE SET
+             best_wpm = MAX(best_wpm, excluded.best_wpm),
+             best_accuracy = MAX(best_accuracy, excluded.best_accuracy),
+             attempts = attempts + 1",
+        rusqlite::params![user_id, &lesson_id, wpm, accuracy_pct],
+    )?;
+
+    let passed_before: Option<i64> = conn
+        .query_row(
+            "SELECT first_passed_at FROM intro_lesson_progress WHERE user_id = ?1 AND lesson_id = ?2",
+            rusqlite::params![user_id, &lesson_id],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
+
+    let mut mastered_now = None;
+    if accuracy_pct >= lesson.meta.target_accuracy
+        && wpm >= lesson.meta.target_wpm
+        && passed_before.is_none()
+    {
+        conn.execute(
+            "UPDATE intro_lesson_progress
+             SET first_passed_at = ?1
+             WHERE user_id = ?2 AND lesson_id = ?3",
+            rusqlite::params![now_unix(), user_id, &lesson_id],
+        )?;
+        mastered_now = Some(lesson_id.clone());
+    }
+
+    let row: LessonProgressRow = conn.query_row(
+        "SELECT lesson_id, first_passed_at, best_wpm, best_accuracy, attempts
+         FROM intro_lesson_progress WHERE user_id = ?1 AND lesson_id = ?2",
+        rusqlite::params![user_id, &lesson_id],
+        |r| {
+            Ok(LessonProgressRow {
+                lesson_id: r.get(0)?,
+                first_passed_at: r.get(1)?,
+                best_wpm: r.get(2)?,
+                best_accuracy: r.get(3)?,
+                attempts: r.get(4)?,
+            })
+        },
+    )?;
+    Ok((mastered_now, Some(row)))
+}
+
+#[derive(Debug, Serialize)]
+pub struct LessonListItem {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub target_accuracy: f64,
+    pub target_wpm: f64,
+    pub unlocked: bool,
+    pub passed: bool,
+    pub best_wpm: f64,
+    pub best_accuracy: f64,
+    pub attempts: i64,
+}
+
+/// Lesson list + per-student progress for the picker UI. A lesson is
+/// "unlocked" when the previous one in the curriculum has been passed,
+/// or when it's the first lesson.
+pub fn list_intro_lessons(
+    conn: &rusqlite::Connection,
+    user_id: i64,
+) -> Result<Vec<LessonListItem>> {
+    let mut passed_set = std::collections::HashSet::new();
+    let mut rows_map: std::collections::HashMap<String, LessonProgressRow> =
+        std::collections::HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT lesson_id, first_passed_at, best_wpm, best_accuracy, attempts
+             FROM intro_lesson_progress WHERE user_id = ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![user_id], |r| {
+            Ok(LessonProgressRow {
+                lesson_id: r.get(0)?,
+                first_passed_at: r.get::<_, Option<i64>>(1)?,
+                best_wpm: r.get(2)?,
+                best_accuracy: r.get(3)?,
+                attempts: r.get(4)?,
+            })
+        })?;
+        for row in rows {
+            let row = row?;
+            if row.first_passed_at.is_some() {
+                passed_set.insert(row.lesson_id.clone());
+            }
+            rows_map.insert(row.lesson_id.clone(), row);
+        }
+    }
+    let mut out = Vec::new();
+    let mut prev_passed = true; // first lesson always unlocked
+    for lesson in lessons::curriculum() {
+        let id = lesson.meta.id.to_string();
+        let progress = rows_map.remove(&id);
+        let passed = passed_set.contains(&id);
+        out.push(LessonListItem {
+            id: id.clone(),
+            title: lesson.meta.title.to_string(),
+            subtitle: lesson.meta.subtitle.to_string(),
+            target_accuracy: lesson.meta.target_accuracy,
+            target_wpm: lesson.meta.target_wpm,
+            unlocked: prev_passed,
+            passed,
+            best_wpm: progress.as_ref().map(|p| p.best_wpm).unwrap_or(0.0),
+            best_accuracy: progress.as_ref().map(|p| p.best_accuracy).unwrap_or(0.0),
+            attempts: progress.as_ref().map(|p| p.attempts).unwrap_or(0),
+        });
+        prev_passed = passed;
+    }
+    Ok(out)
 }
 
 fn award_badges(

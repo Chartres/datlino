@@ -14,6 +14,14 @@ export type ModeMeta = {
 
 export const modes: ModeMeta[] = [
   {
+    code: 'intro_lesson',
+    title: 'Úvodní lekce',
+    subtitle: 'Pro začátečníky: domovská řada → celá klávesnice → diakritika.',
+    principle: 'Progressive disclosure — jedna dovednost za druhou.',
+    supportsAlpha: false,
+    supportsQuery: false
+  },
+  {
     code: 'content',
     title: 'Moje materiály',
     subtitle: 'Piš věty přímo ze svých poznámek.',

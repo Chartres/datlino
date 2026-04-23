@@ -49,6 +49,10 @@
   }
 
   async function startSession() {
+    if (selected === 'intro_lesson') {
+      await goto('/practice/intro');
+      return;
+    }
     busy = true;
     error = null;
     try {

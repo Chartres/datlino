@@ -1,9 +1,12 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { api } from '$lib/api';
   import { profile } from '$lib/profile.svelte';
-  import type { IndexStatus, SearchHit } from '$lib/types';
+  import { currentSession } from '$lib/session-store.svelte';
+  import type { DocumentInfo, IndexStatus, SearchHit } from '$lib/types';
 
   let status = $state<IndexStatus | null>(null);
+  let documents = $state<DocumentInfo[]>([]);
   let error = $state<string | null>(null);
   let busy = $state(false);
 
@@ -12,7 +15,10 @@
 
   async function refreshStatus() {
     try {
-      status = await api.indexStatus();
+      [status, documents] = await Promise.all([
+        api.indexStatus(),
+        api.listDocuments()
+      ]);
     } catch (e) {
       error = String(e);
     }
@@ -25,6 +31,21 @@
       if (!picked) return;
       busy = true;
       await api.addWatchedFolder(picked);
+      await refreshStatus();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function pickAndIngestFile() {
+    error = null;
+    try {
+      const picked = await api.pickFile();
+      if (!picked) return;
+      busy = true;
+      await api.ingestSingleFile(picked);
       await refreshStatus();
     } catch (e) {
       error = String(e);
@@ -57,6 +78,35 @@
     } finally {
       busy = false;
     }
+  }
+
+  async function drillDocument(doc: DocumentInfo) {
+    busy = true;
+    error = null;
+    try {
+      const plan = await api.createSession({
+        mode: 'content',
+        alpha: 1.0,
+        target_duration_s: 600,
+        document_id: doc.id
+      });
+      if (!plan.sentences.length) {
+        error = 'Dokument nemá žádné věty k trénování.';
+        return;
+      }
+      currentSession.plan = plan;
+      currentSession.summary = null;
+      await goto('/practice/session');
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function docName(path: string): string {
+    const parts = path.split(/[\\/]/);
+    return parts[parts.length - 1];
   }
 
   $effect(() => {
@@ -96,10 +146,39 @@
     {/if}
   {/if}
 
-  <button class="primary" onclick={pickAndAddFolder} disabled={busy}>
-    {busy ? 'Pracuji…' : 'Přidat složku s poznámkami'}
-  </button>
+  <div class="actions">
+    <button class="primary" onclick={pickAndAddFolder} disabled={busy}>
+      {busy ? 'Pracuji…' : 'Přidat složku'}
+    </button>
+    <button class="secondary" onclick={pickAndIngestFile} disabled={busy}>
+      Přidat jeden soubor
+    </button>
+  </div>
 </section>
+
+{#if documents.length > 0}
+  <section>
+    <h3>Dokumenty</h3>
+    <p class="muted small">
+      Klikni na dokument pro trénink celého souboru po sobě — bez hledání.
+    </p>
+    <ul class="docs">
+      {#each documents as doc (doc.id)}
+        <li>
+          <div class="doc-info">
+            <span class="doc-name">{docName(doc.source_path)}</span>
+            <span class="doc-meta">
+              {doc.chunk_count} vět · {doc.kind.toUpperCase()}
+            </span>
+          </div>
+          <button class="secondary" onclick={() => drillDocument(doc)} disabled={busy}>
+            Trénovat celý
+          </button>
+        </li>
+      {/each}
+    </ul>
+  </section>
+{/if}
 
 <section>
   <h3>Hledat ve svých materiálech</h3>
@@ -261,5 +340,65 @@
   }
   .error {
     color: #b3271f;
+  }
+  .actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .small {
+    font-size: 0.85rem;
+  }
+  button.secondary {
+    padding: 0.5rem 1rem;
+    border: 1px solid rgba(28, 25, 23, 0.2);
+    background: transparent;
+    color: #44403c;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+  }
+  button.secondary:hover {
+    border-color: #b3271f;
+    color: #b3271f;
+  }
+  button.secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .docs {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 0.5rem;
+  }
+  .docs li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 0.8rem;
+    background: #fffaf2;
+    border: 1px solid rgba(28, 25, 23, 0.08);
+    border-radius: 6px;
+  }
+  .doc-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+  .doc-name {
+    font-weight: 600;
+    color: #1c1917;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .doc-meta {
+    font-size: 0.75rem;
+    color: #78716c;
   }
 </style>

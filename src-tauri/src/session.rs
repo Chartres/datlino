@@ -38,6 +38,9 @@ pub enum PracticeMode {
     Diacritics,
     WeakKeys,
     Hybrid,
+    /// Structured progression for absolute beginners — home row → full
+    /// keyboard → diacritics → real sentences.
+    IntroLesson,
 }
 
 impl PracticeMode {
@@ -48,6 +51,7 @@ impl PracticeMode {
             PracticeMode::Diacritics => "diacritics",
             PracticeMode::WeakKeys => "weak_keys",
             PracticeMode::Hybrid => "hybrid",
+            PracticeMode::IntroLesson => "intro_lesson",
         }
     }
 }
@@ -99,6 +103,16 @@ pub struct SessionRequest {
     /// Language hint fed to the LLM system prompt. "cs" / "sk" / "en" / "de".
     #[serde(default)]
     pub language: Option<String>,
+    /// When `mode == IntroLesson`, which lesson id to load (from
+    /// `lessons::curriculum`). If absent, picks the first lesson the
+    /// student hasn't yet passed.
+    #[serde(default)]
+    pub lesson_id: Option<String>,
+    /// When `mode == Content` and the student picks a specific file via
+    /// the document picker, we bypass BM25 and return every chunk of
+    /// that document in source order.
+    #[serde(default)]
+    pub document_id: Option<i64>,
 }
 
 impl Default for SessionRequest {
@@ -114,6 +128,8 @@ impl Default for SessionRequest {
             rephrase: false,
             rephrase_style: None,
             language: None,
+            lesson_id: None,
+            document_id: None,
         }
     }
 }
@@ -161,6 +177,9 @@ pub fn create_session(
     req: &SessionRequest,
 ) -> Result<SessionPlan> {
     let mut sentences = match req.mode {
+        PracticeMode::Content if req.document_id.is_some() => {
+            pick_document(conn, req.document_id.unwrap(), req.target_duration_s)?
+        }
         PracticeMode::Content => match req.content_strategy.unwrap_or(ContentStrategy::Across) {
             ContentStrategy::Across => pick_content(conn, user_id, req)?,
             ContentStrategy::Chapter => pick_chapter(conn, req)?,
@@ -170,6 +189,7 @@ pub fn create_session(
         PracticeMode::Diacritics => pick_diacritics(conn, req)?,
         PracticeMode::WeakKeys => pick_weak_keys(conn, user_id, req)?,
         PracticeMode::Hybrid => pick_hybrid(conn, user_id, req)?,
+        PracticeMode::IntroLesson => pick_intro_lesson(conn, user_id, req)?,
     };
 
     // Optional rephrase pass — only for Content mode with backing chunks.
@@ -265,6 +285,38 @@ fn pick_across(
         .filter(|h| source_allowed(&h.source_path, pinned))
         .filter(|h| !is_low_content(&h.text))
         .collect();
+
+    // Also match the query against document source_paths — a student
+    // searching "chemie" should land on `chemie-periodicka-soustava.md`
+    // even if the word never appears in the body. We pull EVERY chunk of
+    // any document whose path matches.
+    let path_doc_ids = documents_matching_path(conn, query, pinned)?;
+
+    // If BM25 only surfaced a single chunk, but it lives in a much bigger
+    // document (as "chemie" currently does — one keyword buried in a
+    // 10-sentence file), fall through to showing the whole document. The
+    // student clearly wants to study the chapter, not squint at one hit.
+    let scarce_hit_doc = {
+        let mut doc_hits: HashMap<i64, usize> = HashMap::new();
+        for h in &hits {
+            *doc_hits.entry(h.document_id).or_insert(0) += 1;
+        }
+        if doc_hits.len() == 1 && *doc_hits.values().next().unwrap_or(&0) <= 2 {
+            doc_hits.keys().next().copied()
+        } else {
+            None
+        }
+    };
+
+    let expand_doc_ids: HashSet<i64> = path_doc_ids
+        .iter()
+        .copied()
+        .chain(scarce_hit_doc.into_iter())
+        .collect();
+    if !expand_doc_ids.is_empty() {
+        return expand_whole_documents(conn, &expand_doc_ids, budget);
+    }
+
     if hits.is_empty() {
         return Ok(Vec::new());
     }
@@ -627,6 +679,145 @@ fn apply_rephrase(
         }
     }
     Ok(())
+}
+
+/// Match a user's query against document `source_path`s. Splits the path
+/// on non-alphanumerics so "chemie" matches "chemie-periodicka-soustava.md".
+/// Returns matching document ids.
+fn documents_matching_path(
+    conn: &Connection,
+    query: &str,
+    pinned: &[String],
+) -> Result<Vec<i64>> {
+    let q = query.trim().to_lowercase();
+    if q.len() < 3 {
+        return Ok(Vec::new());
+    }
+    // Pull the whole document list (tens to hundreds of rows — tiny for
+    // SQLite) and filter in Rust; lets us split the path on anything.
+    let mut stmt = conn.prepare("SELECT id, source_path FROM document")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, path) = row?;
+        if !source_allowed(&path, pinned) {
+            continue;
+        }
+        let slug = std::path::Path::new(&path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        let tokens: Vec<&str> = slug
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if tokens.iter().any(|t| *t == q) {
+            out.push(id);
+            continue;
+        }
+        // Fuzzy: any query word appears whole in a filename token.
+        for q_word in q.split_whitespace() {
+            if q_word.len() >= 3 && tokens.iter().any(|t| *t == q_word) {
+                out.push(id);
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn expand_whole_documents(
+    conn: &Connection,
+    doc_ids: &std::collections::HashSet<i64>,
+    budget: usize,
+) -> Result<Vec<SessionSentence>> {
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    // Take docs in a stable order so the session doesn't jump randomly.
+    let mut sorted: Vec<i64> = doc_ids.iter().copied().collect();
+    sorted.sort();
+    for doc_id in sorted {
+        let src: String = conn.query_row(
+            "SELECT source_path FROM document WHERE id = ?1",
+            params![doc_id],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT id, text FROM chunk WHERE document_id = ?1 AND is_heading = 0
+             ORDER BY char_offset ASC",
+        )?;
+        let rows = stmt.query_map(params![doc_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, text) = row?;
+            if is_low_content(&text) {
+                continue;
+            }
+            total += text.chars().count();
+            out.push(SessionSentence {
+                chunk_id: Some(id),
+                text,
+                source_path: Some(src.clone()),
+                is_generated: false,
+                source_text: None,
+                rephrased_id: None,
+                similarity: None,
+            });
+            if total >= budget * 2 {
+                return Ok(out);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Metadata for the document picker — lets students drill whole files
+/// without having to pick a specific chapter.
+#[derive(Debug, Serialize)]
+pub struct DocumentInfo {
+    pub id: i64,
+    pub source_path: String,
+    pub kind: String,
+    pub chunk_count: i64,
+}
+
+pub fn list_documents(conn: &Connection) -> Result<Vec<DocumentInfo>> {
+    let mut stmt = conn.prepare(
+        "SELECT d.id, d.source_path, d.kind, COUNT(c.id) AS chunks
+         FROM document d
+         LEFT JOIN chunk c ON c.document_id = d.id AND c.is_heading = 0
+         GROUP BY d.id
+         ORDER BY d.source_path ASC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(DocumentInfo {
+            id: r.get(0)?,
+            source_path: r.get(1)?,
+            kind: r.get(2)?,
+            chunk_count: r.get(3)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Whole-document session generator — returns every chunk of the given
+/// document in source order (the single-doc analogue of Chapter mode).
+pub fn pick_document(
+    conn: &Connection,
+    document_id: i64,
+    duration_s: i64,
+) -> Result<Vec<SessionSentence>> {
+    let budget = char_budget(duration_s);
+    let doc_ids: std::collections::HashSet<i64> = [document_id].into_iter().collect();
+    expand_whole_documents(conn, &doc_ids, budget)
 }
 
 fn parse_chapter_id(s: &str) -> Option<(i64, String)> {
@@ -1039,6 +1230,58 @@ fn session_recency_map(conn: &Connection, user_id: i64) -> Result<std::collectio
     Ok(map)
 }
 
+/// **IntroLesson** mode — load drills from the `lessons` curriculum.
+/// Picks the requested lesson (or the first not-yet-passed one if the
+/// caller didn't specify).
+fn pick_intro_lesson(
+    conn: &Connection,
+    user_id: i64,
+    req: &SessionRequest,
+) -> Result<Vec<SessionSentence>> {
+    let lesson_id: String = match req.lesson_id.as_deref() {
+        Some(id) => id.to_string(),
+        None => first_unpassed_lesson(conn, user_id)?,
+    };
+    let Some(lesson) = crate::lessons::lesson_by_id(&lesson_id) else {
+        return Ok(Vec::new());
+    };
+    let drills = (lesson.drills)();
+    Ok(drills
+        .into_iter()
+        .map(|d| SessionSentence {
+            chunk_id: None,
+            text: d.text,
+            source_path: Some(format!("lesson://{}", lesson.meta.id)),
+            is_generated: true,
+            source_text: None,
+            rephrased_id: None,
+            similarity: None,
+        })
+        .collect())
+}
+
+fn first_unpassed_lesson(conn: &Connection, user_id: i64) -> Result<String> {
+    let mut stmt = conn.prepare(
+        "SELECT lesson_id FROM intro_lesson_progress
+         WHERE user_id = ?1 AND first_passed_at IS NOT NULL",
+    )?;
+    let passed: std::collections::HashSet<String> = stmt
+        .query_map(params![user_id], |r| r.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+    for lesson in crate::lessons::curriculum() {
+        if !passed.contains(lesson.meta.id) {
+            return Ok(lesson.meta.id.to_string());
+        }
+    }
+    // All passed — stay on the last lesson as a refresher.
+    Ok(crate::lessons::curriculum()
+        .last()
+        .map(|l| l.meta.id.to_string())
+        .unwrap_or_default())
+}
+
 fn builtin_warmup_drills() -> Vec<SessionSentence> {
     [
         "asdf jkl; asdf jkl; asdf jkl;",
@@ -1094,6 +1337,8 @@ mod tests {
         rephrase: false,
             rephrase_style: None,
             language: None,
+            lesson_id: None,
+            document_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1115,6 +1360,8 @@ mod tests {
         rephrase: false,
             rephrase_style: None,
             language: None,
+            lesson_id: None,
+            document_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1136,6 +1383,8 @@ mod tests {
         rephrase: false,
             rephrase_style: None,
             language: None,
+            lesson_id: None,
+            document_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1166,6 +1415,8 @@ mod tests {
         rephrase: false,
             rephrase_style: None,
             language: None,
+            lesson_id: None,
+            document_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         let sources: std::collections::HashSet<_> = plan
@@ -1208,6 +1459,8 @@ mod tests {
         rephrase: false,
             rephrase_style: None,
             language: None,
+            lesson_id: None,
+            document_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert_eq!(
@@ -1245,6 +1498,8 @@ mod tests {
         rephrase: false,
             rephrase_style: None,
             language: None,
+            lesson_id: None,
+            document_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1281,6 +1536,8 @@ mod tests {
         rephrase: false,
             rephrase_style: None,
             language: None,
+            lesson_id: None,
+            document_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1300,6 +1557,8 @@ mod tests {
         rephrase: false,
             rephrase_style: None,
             language: None,
+            lesson_id: None,
+            document_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         let n: i64 = conn

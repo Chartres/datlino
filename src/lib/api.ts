@@ -3,10 +3,12 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import type {
   AttemptRecord,
   ChapterInfo,
+  DocumentInfo,
   EmbedProgress,
   EmbeddingProviderKind,
   EmbeddingStatus,
   IndexStatus,
+  LessonListItem,
   SearchHit,
   SessionHistoryRow,
   SessionPlan,
@@ -57,6 +59,14 @@ export const api = {
   setAnthropicApiKey: (key: string) =>
     invoke<void>('set_anthropic_api_key', { key }),
   anthropicKeyPresent: () => invoke<boolean>('anthropic_key_present'),
+  detectAnthropicEnvKey: () => invoke<string | null>('detect_anthropic_env_key'),
+
+  // intro lessons
+  listIntroLessons: () => invoke<LessonListItem[]>('list_intro_lessons'),
+
+  // documents / file picker
+  listDocuments: () => invoke<DocumentInfo[]>('list_documents'),
+  ingestSingleFile: (path: string) => invoke<boolean>('ingest_single_file', { path }),
 
   // native dialog
   pickFolder: async (): Promise<string | null> => {
@@ -64,6 +74,17 @@ export const api = {
       directory: true,
       multiple: false,
       title: 'Vyber složku s poznámkami'
+    });
+    return typeof result === 'string' ? result : null;
+  },
+  pickFile: async (): Promise<string | null> => {
+    const result = await openDialog({
+      directory: false,
+      multiple: false,
+      title: 'Vyber soubor k importu',
+      filters: [
+        { name: 'Poznámky', extensions: ['md', 'markdown', 'txt', 'pdf'] }
+      ]
     });
     return typeof result === 'string' ? result : null;
   }

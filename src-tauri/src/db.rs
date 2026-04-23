@@ -216,6 +216,19 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS idx_rephrased_source ON rephrased_chunk(source_chunk_id);
     "#,
+    // 0007 — intro-lesson progress. One row per (user, lesson id); records
+    // the session that first passed the mastery bar and the best score.
+    r#"
+    CREATE TABLE IF NOT EXISTS intro_lesson_progress (
+        user_id INTEGER NOT NULL,
+        lesson_id TEXT NOT NULL,
+        first_passed_at INTEGER,
+        best_wpm REAL NOT NULL DEFAULT 0,
+        best_accuracy REAL NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, lesson_id)
+    );
+    "#,
 ];
 
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {

@@ -3,7 +3,21 @@ export type PracticeMode =
   | 'warmup'
   | 'diacritics'
   | 'weak_keys'
-  | 'hybrid';
+  | 'hybrid'
+  | 'intro_lesson';
+
+export type LessonListItem = {
+  id: string;
+  title: string;
+  subtitle: string;
+  target_accuracy: number;
+  target_wpm: number;
+  unlocked: boolean;
+  passed: boolean;
+  best_wpm: number;
+  best_accuracy: number;
+  attempts: number;
+};
 
 export type ContentStrategy = 'across' | 'chapter' | 'exam_prep';
 
@@ -20,6 +34,15 @@ export type SessionRequest = {
   rephrase?: boolean;
   rephrase_style?: RephraseStyle;
   language?: string;
+  lesson_id?: string;
+  document_id?: number;
+};
+
+export type DocumentInfo = {
+  id: number;
+  source_path: string;
+  kind: string;
+  chunk_count: number;
 };
 
 export type ChapterInfo = {

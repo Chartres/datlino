@@ -6,6 +6,7 @@
 pub mod db;
 pub mod embeddings;
 pub mod ingest;
+pub mod lessons;
 pub mod ocr;
 pub mod pedagogy;
 pub mod progress;
@@ -278,6 +279,45 @@ fn anthropic_key_present() -> std::result::Result<bool, String> {
         .is_some())
 }
 
+/// Detect an `ANTHROPIC_API_KEY` environment variable — frequently set by
+/// Claude Code users who already have a key. Returns the key so the UI
+/// can offer a one-click import; returns `None` if unset.
+#[tauri::command]
+fn detect_anthropic_env_key() -> std::result::Result<Option<String>, String> {
+    Ok(std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty()))
+}
+
+#[tauri::command]
+fn list_intro_lessons(
+    state: State<'_, AppState>,
+) -> std::result::Result<Vec<progress::LessonListItem>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    progress::list_intro_lessons(&conn, DEFAULT_USER_ID).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_documents(
+    state: State<'_, AppState>,
+) -> std::result::Result<Vec<session::DocumentInfo>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    session::list_documents(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ingest_single_file(
+    path: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<bool, String> {
+    let pb = PathBuf::from(&path);
+    if !pb.exists() {
+        return Err(format!("path does not exist: {path}"));
+    }
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    ingest::ingest_file(&mut conn, &pb).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn embed_pending(
     state: State<'_, AppState>,
@@ -360,6 +400,10 @@ pub fn run() {
             get_ocr_status,
             set_anthropic_api_key,
             anthropic_key_present,
+            detect_anthropic_env_key,
+            list_intro_lessons,
+            list_documents,
+            ingest_single_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Datlino");

@@ -43,9 +43,9 @@ keyring = "2"
 # because these crates are heavy (several minutes of first-compile) and add
 # ~15 MB to the binary. The brief §5.3 names multilingual-e5-small as the
 # local model; it's ~120 MB of weights downloaded on first use via hf-hub.
-candle-core = { version = "0.7", optional = true }
-candle-nn = { version = "0.7", optional = true }
-candle-transformers = { version = "0.7", optional = true }
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+candle-transformers = { version = "0.8", optional = true }
 tokenizers = { version = "0.20", default-features = false, features = ["onig", "http"], optional = true }
 hf-hub = { version = "0.3", optional = true }
 
@@ -67,13 +67,17 @@ tempfile = "3"
 [dev-dependencies]
 
 [features]
+# Candle ships ON by default — the point of having local embeddings is
+# for users to actually click the tile without a manual rebuild. First
+# compile is 5–10 min; subsequent builds are incremental. For a headless
+# CI loop, disable via `--no-default-features`.
+default = ["candle"]
+
 # By default Tauri uses a custom protocol on Windows. Keep this off until
 # we explicitly need it.
 custom-protocol = ["tauri/custom-protocol"]
 
-# Enable local (on-device) embeddings via Candle + multilingual-e5-small.
-# Opt-in because the Candle crates take several minutes to compile on
-# first build. Trigger with: `cargo build --features candle`.
+# Local (on-device) embeddings via Candle + multilingual-e5-small.
 candle = [
     "dep:candle-core",
     "dep:candle-nn",
