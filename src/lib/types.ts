@@ -1,0 +1,104 @@
+export type PracticeMode =
+  | 'content'
+  | 'warmup'
+  | 'diacritics'
+  | 'weak_keys'
+  | 'hybrid';
+
+export type SessionRequest = {
+  mode: PracticeMode;
+  alpha: number;
+  target_duration_s: number;
+  query?: string;
+  pinned_source_prefixes?: string[];
+};
+
+export type SessionSentence = {
+  chunk_id: number | null;
+  text: string;
+  source_path: string | null;
+  is_generated: boolean;
+};
+
+export type SessionPlan = {
+  session_id: number;
+  mode: PracticeMode;
+  alpha: number;
+  sentences: SessionSentence[];
+};
+
+export type Keystroke = {
+  t_ms: number;
+  actual: string;
+  expected: string;
+  correct: boolean;
+};
+
+export type AttemptRecord = {
+  chunk_id: number | null;
+  target_text: string;
+  started_at_ms: number;
+  finished_at_ms: number;
+  keystrokes: Keystroke[];
+  completed: boolean;
+};
+
+export type WeakNgram = {
+  ngram: string;
+  occurrences: number;
+  ema_latency_ms: number;
+  ema_error_rate: number;
+  weakness: number;
+};
+
+export type SessionSummary = {
+  session_id: number;
+  wpm: number;
+  accuracy_pct: number;
+  xp_earned: number;
+  total_xp: number;
+  level: number;
+  current_streak: number;
+  longest_streak: number;
+  words_typed: number;
+  characters_typed: number;
+  sentences_completed: number;
+  sentences_attempted: number;
+  badges_awarded: string[];
+  weak_preview: WeakNgram[];
+};
+
+export type UserProfileView = {
+  total_xp: number;
+  level: number;
+  current_streak: number;
+  longest_streak: number;
+  total_sessions: number;
+  wpm_baseline: number | null;
+  accuracy_baseline: number | null;
+  badges: string[];
+};
+
+export type SessionHistoryRow = {
+  session_id: number;
+  created_at: number;
+  mode: string;
+  alpha: number;
+  xp_earned: number;
+  summary: SessionSummary | null;
+};
+
+export type IndexStatus = {
+  document_count: number;
+  chunk_count: number;
+  watched_roots: string[];
+};
+
+export type SearchHit = {
+  chunk_id: number;
+  document_id: number;
+  source_path: string;
+  text: string;
+  char_offset: number;
+  score: number;
+};

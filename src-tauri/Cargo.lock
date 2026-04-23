@@ -522,6 +522,7 @@ name = "datlino"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "notify",
  "once_cell",
  "regex",

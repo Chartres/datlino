@@ -18,12 +18,12 @@ fn fixtures_root() -> PathBuf {
 }
 
 #[test]
-fn ingests_all_five_cz_fixtures() {
+fn ingests_all_cz_fixtures() {
     let mut conn = db::open_in_memory().unwrap();
     let stats = ingest::ingest_tree(&mut conn, &fixtures_root()).unwrap();
-    assert_eq!(stats.files_seen, 5, "expected exactly five fixture files");
-    assert_eq!(stats.files_ingested, 5);
-    assert!(stats.chunks_written > 30, "expected a healthy chunk count");
+    assert!(stats.files_seen >= 10, "expected at least 10 fixture files");
+    assert_eq!(stats.files_ingested, stats.files_seen);
+    assert!(stats.chunks_written > 80, "expected a healthy chunk count");
 }
 
 #[test]

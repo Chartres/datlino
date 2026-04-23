@@ -1,44 +1,42 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
+  import { api } from '$lib/api';
+  import { profile } from '$lib/profile.svelte';
+  import type { IndexStatus, SearchHit } from '$lib/types';
 
-  type SearchHit = {
-    chunk_id: number;
-    document_id: number;
-    source_path: string;
-    text: string;
-    char_offset: number;
-    score: number;
-  };
-
-  type IndexStatus = {
-    document_count: number;
-    chunk_count: number;
-    watched_roots: string[];
-  };
+  let status = $state<IndexStatus | null>(null);
+  let error = $state<string | null>(null);
+  let busy = $state(false);
 
   let query = $state('');
-  let k = $state(10);
   let hits = $state<SearchHit[]>([]);
-  let status = $state<IndexStatus | null>(null);
-  let busy = $state(false);
-  let error = $state<string | null>(null);
-  let folderInput = $state('');
 
   async function refreshStatus() {
     try {
-      status = await invoke<IndexStatus>('index_status');
+      status = await api.indexStatus();
     } catch (e) {
       error = String(e);
     }
   }
 
-  async function addFolder() {
-    if (!folderInput.trim()) return;
-    busy = true;
+  async function pickAndAddFolder() {
     error = null;
     try {
-      await invoke('add_watched_folder', { path: folderInput.trim() });
-      folderInput = '';
+      const picked = await api.pickFolder();
+      if (!picked) return;
+      busy = true;
+      await api.addWatchedFolder(picked);
+      await refreshStatus();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function removeFolder(path: string) {
+    busy = true;
+    try {
+      await api.removeWatchedFolder(path);
       await refreshStatus();
     } catch (e) {
       error = String(e);
@@ -48,10 +46,11 @@
   }
 
   async function runSearch() {
+    if (!query.trim()) return;
     busy = true;
     error = null;
     try {
-      hits = await invoke<SearchHit[]>('search_chunks', { query, k });
+      hits = await api.searchChunks(query.trim(), 10);
     } catch (e) {
       error = String(e);
       hits = [];
@@ -65,42 +64,45 @@
   });
 </script>
 
+<section class="hero">
+  <div>
+    <h2>Ahoj {profile.data && profile.data.total_sessions > 0 ? 'zpět' : 'a vítej'}.</h2>
+    <p>
+      Datlino ti pomáhá se učit a zlepšovat psaní naslepo na tvých vlastních
+      poznámkách. Vyber si složku s materiály, nebo rovnou vyzkoušej jeden
+      z tréninkových módů.
+    </p>
+  </div>
+  <a class="cta" href="/practice">Začít trénink →</a>
+</section>
+
 <section>
-  <h2>Knihovna</h2>
+  <h3>Knihovna</h3>
   {#if status}
     <p class="muted">
-      {status.document_count} dokumentů, {status.chunk_count} vět.
-      Sledované složky: {status.watched_roots.length || 'žádné'}
+      {status.document_count} dokumentů · {status.chunk_count} vět k tréninku.
     </p>
     {#if status.watched_roots.length}
       <ul class="paths">
         {#each status.watched_roots as p}
-          <li><code>{p}</code></li>
+          <li>
+            <code>{p}</code>
+            <button class="link" onclick={() => removeFolder(p)}>odebrat</button>
+          </li>
         {/each}
       </ul>
+    {:else}
+      <p class="muted">Zatím není přidána žádná složka.</p>
     {/if}
   {/if}
 
-  <form
-    onsubmit={(e) => {
-      e.preventDefault();
-      addFolder();
-    }}
-  >
-    <input
-      type="text"
-      placeholder="/cesta/k/poznámkám"
-      bind:value={folderInput}
-      disabled={busy}
-    />
-    <button type="submit" disabled={busy || !folderInput.trim()}>
-      Přidat složku
-    </button>
-  </form>
+  <button class="primary" onclick={pickAndAddFolder} disabled={busy}>
+    {busy ? 'Pracuji…' : 'Přidat složku s poznámkami'}
+  </button>
 </section>
 
 <section>
-  <h2>Hledat věty</h2>
+  <h3>Hledat ve svých materiálech</h3>
   <form
     onsubmit={(e) => {
       e.preventDefault();
@@ -109,11 +111,11 @@
   >
     <input
       type="text"
-      placeholder="např. Habsburkové, fotosyntéza, derivace…"
+      placeholder="např. fotosyntéza, Habsburkové, perfektum…"
       bind:value={query}
       disabled={busy}
     />
-    <button type="submit" disabled={busy || !query.trim()}>Hledat</button>
+    <button type="submit" class="primary" disabled={busy || !query.trim()}>Hledat</button>
   </form>
 
   {#if error}
@@ -128,25 +130,57 @@
           <p class="meta">
             <span>{hit.source_path}</span>
             <span>·</span>
-            <span>BM25 {hit.score.toFixed(2)}</span>
+            <span>skóre {hit.score.toFixed(2)}</span>
           </p>
         </li>
       {/each}
     </ol>
-  {:else if query && !busy}
-    <p class="muted">Žádné shody.</p>
   {/if}
 </section>
 
 <style>
+  .hero {
+    display: flex;
+    gap: 1.5rem;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.25rem 1.5rem;
+    background: #fffaf2;
+    border: 1px solid rgba(28, 25, 23, 0.08);
+    border-radius: 10px;
+    margin-bottom: 2rem;
+  }
+
+  .hero h2 {
+    margin: 0 0 0.25rem;
+    font-size: 1.3rem;
+  }
+  .hero p {
+    margin: 0;
+    color: #57534e;
+    font-size: 0.95rem;
+    max-width: 38rem;
+  }
+
+  .cta {
+    padding: 0.6rem 1.1rem;
+    background: #b3271f;
+    color: #fffaf2;
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
   section {
     margin-bottom: 2.5rem;
   }
-  h2 {
-    font-size: 1.1rem;
+  h3 {
+    font-size: 1.05rem;
     margin: 0 0 0.5rem;
     color: #292524;
   }
+
   form {
     display: flex;
     gap: 0.5rem;
@@ -160,7 +194,8 @@
     font: inherit;
     background: #fffaf2;
   }
-  button {
+
+  button.primary {
     padding: 0.5rem 1rem;
     border: 1px solid #b3271f;
     background: #b3271f;
@@ -169,21 +204,39 @@
     cursor: pointer;
     font: inherit;
   }
-  button:disabled {
+  button.primary:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
+  button.link {
+    background: none;
+    border: none;
+    color: #b3271f;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.8rem;
+    margin-left: 0.5rem;
+  }
+
   .muted {
     color: #78716c;
     font-size: 0.9rem;
   }
   .paths {
-    margin: 0.25rem 0 0.75rem 1rem;
+    list-style: none;
     padding: 0;
-    font-size: 0.85rem;
+    margin: 0.5rem 0;
+  }
+  .paths li {
+    padding: 0.35rem 0;
+    font-size: 0.9rem;
+  }
+  .paths code {
+    background: rgba(28, 25, 23, 0.05);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
   }
   .hits {
-    list-style: decimal;
     padding-left: 1.5rem;
   }
   .hits li {

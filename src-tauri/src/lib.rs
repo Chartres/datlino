@@ -5,8 +5,11 @@
 
 pub mod db;
 pub mod ingest;
+pub mod pedagogy;
+pub mod progress;
 pub mod search;
 pub mod segmenter;
+pub mod session;
 pub mod watcher;
 
 use anyhow::Result;
@@ -15,6 +18,9 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State};
+
+/// Single-user install for MVP — every command uses user_id = 1.
+const DEFAULT_USER_ID: i64 = 1;
 
 /// App-wide state. `conn` is wrapped in a Mutex because rusqlite's
 /// `Connection` is single-threaded.
@@ -29,6 +35,8 @@ pub struct IndexStatus {
     pub chunk_count: i64,
     pub watched_roots: Vec<String>,
 }
+
+// ---------- library / search ----------
 
 #[tauri::command]
 fn search_chunks(
@@ -49,10 +57,7 @@ fn add_watched_folder(
     if !p.exists() {
         return Err(format!("path does not exist: {path}"));
     }
-    state
-        .watcher
-        .add_root(p)
-        .map_err(|e| e.to_string())
+    state.watcher.add_root(p).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -88,15 +93,64 @@ fn index_status(state: State<'_, AppState>) -> std::result::Result<IndexStatus, 
     })
 }
 
+// ---------- sessions ----------
+
+#[tauri::command]
+fn create_session(
+    request: session::SessionRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<session::SessionPlan, String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    session::create_session(&mut conn, DEFAULT_USER_ID, &request).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn finalize_session(
+    session_id: i64,
+    attempts: Vec<progress::AttemptRecord>,
+    state: State<'_, AppState>,
+) -> std::result::Result<progress::SessionSummary, String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    progress::finalize_session(&mut conn, DEFAULT_USER_ID, session_id, &attempts)
+        .map_err(|e| e.to_string())
+}
+
+// ---------- profile / history ----------
+
+#[tauri::command]
+fn get_profile(
+    state: State<'_, AppState>,
+) -> std::result::Result<progress::UserProfileView, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    progress::user_profile_view(&conn, DEFAULT_USER_ID).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_history(
+    limit: usize,
+    state: State<'_, AppState>,
+) -> std::result::Result<Vec<progress::SessionHistoryRow>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    progress::session_history(&conn, DEFAULT_USER_ID, limit.clamp(1, 200))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_weak_ngrams(
+    limit: usize,
+    state: State<'_, AppState>,
+) -> std::result::Result<Vec<pedagogy::WeakNgram>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    pedagogy::weak_ngrams(&conn, DEFAULT_USER_ID, limit.clamp(1, 50))
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("resolving app_data_dir");
+            let data_dir = app.path().app_data_dir().expect("resolving app_data_dir");
             std::fs::create_dir_all(&data_dir)?;
             let db_path = data_dir.join("datlino.db");
 
@@ -117,6 +171,11 @@ pub fn run() {
             add_watched_folder,
             remove_watched_folder,
             index_status,
+            create_session,
+            finalize_session,
+            get_profile,
+            get_history,
+            get_weak_ngrams,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Datlino");
