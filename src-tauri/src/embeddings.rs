@@ -184,6 +184,212 @@ impl EmbeddingProvider for CohereEmbedder {
     }
 }
 
+// ---------- Candle local provider (feature = "candle") ----------
+
+#[cfg(feature = "candle")]
+pub mod candle_backend {
+    //! Multilingual-e5-small via Candle + hf-hub. Cold path downloads
+    //! ~120 MB of safetensors on first use into the HF cache dir; warm
+    //! inference on CPU sits around 60-150 ms per sentence on modern
+    //! hardware, sub-30 ms on Apple Silicon via the Metal backend.
+    //!
+    //! The e5 family requires "query: " / "passage: " prefixes at inference
+    //! time — we use "passage: " for stored chunks and "query: " for the
+    //! user's search text.
+    use super::*;
+    use candle_core::{DType, Device, Tensor};
+    use candle_nn::VarBuilder;
+    use candle_transformers::models::bert::{BertModel, Config as BertConfig, HiddenAct};
+    use hf_hub::{api::sync::Api, Repo, RepoType};
+    use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
+
+    const MODEL_ID: &str = "intfloat/multilingual-e5-small";
+    const DIM: usize = 384;
+    const MAX_LEN: usize = 512;
+
+    pub struct CandleEmbedder {
+        model: BertModel,
+        tokenizer: Tokenizer,
+        device: Device,
+    }
+
+    impl CandleEmbedder {
+        pub fn dim_const() -> usize {
+            DIM
+        }
+
+        /// Download (cached) + load the multilingual-e5-small weights. Uses
+        /// the HuggingFace cache dir so repeated app launches are instant
+        /// after the first download.
+        pub fn load() -> Result<Self> {
+            let device = pick_device();
+            let api = Api::new().map_err(|e| anyhow!("hf-hub: {e}"))?;
+            let repo = api.repo(Repo::new(MODEL_ID.to_string(), RepoType::Model));
+            let config_path = repo.get("config.json").map_err(|e| anyhow!("config: {e}"))?;
+            let tokenizer_path = repo
+                .get("tokenizer.json")
+                .map_err(|e| anyhow!("tokenizer: {e}"))?;
+            let weights_path = repo
+                .get("model.safetensors")
+                .map_err(|e| anyhow!("weights: {e}"))?;
+
+            let config: BertConfig = serde_json::from_slice(&std::fs::read(&config_path)?)
+                .map_err(|e| anyhow!("config parse: {e}"))?;
+            let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
+                .map_err(|e| anyhow!("tokenizer load: {e}"))?;
+            tokenizer
+                .with_padding(Some(PaddingParams {
+                    strategy: PaddingStrategy::BatchLongest,
+                    ..Default::default()
+                }))
+                .with_truncation(Some(TruncationParams {
+                    max_length: MAX_LEN,
+                    ..Default::default()
+                }))
+                .map_err(|e| anyhow!("tokenizer config: {e}"))?;
+
+            let vb = unsafe {
+                VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &device)
+                    .map_err(|e| anyhow!("safetensors: {e}"))?
+            };
+            let mut cfg = config;
+            cfg.hidden_act = HiddenAct::Gelu;
+            let model = BertModel::load(vb, &cfg).map_err(|e| anyhow!("bert load: {e}"))?;
+            Ok(Self {
+                model,
+                tokenizer,
+                device,
+            })
+        }
+    }
+
+    fn pick_device() -> Device {
+        // Candle's Metal backend is compiled in on macOS when features
+        // allow; default feature set uses CPU. This helper auto-picks
+        // whatever's available at runtime.
+        if candle_core::utils::cuda_is_available() {
+            Device::new_cuda(0).unwrap_or(Device::Cpu)
+        } else if candle_core::utils::metal_is_available() {
+            Device::new_metal(0).unwrap_or(Device::Cpu)
+        } else {
+            Device::Cpu
+        }
+    }
+
+    impl EmbeddingProvider for CandleEmbedder {
+        fn kind(&self) -> EmbeddingProviderKind {
+            EmbeddingProviderKind::Local
+        }
+        fn dim(&self) -> usize {
+            DIM
+        }
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            if texts.is_empty() {
+                return Ok(Vec::new());
+            }
+            // e5 expects "passage: …" at indexing time.
+            let prefixed: Vec<String> =
+                texts.iter().map(|t| format!("passage: {}", t)).collect();
+            let refs: Vec<&str> = prefixed.iter().map(|s| s.as_str()).collect();
+            let encodings = self
+                .tokenizer
+                .encode_batch(refs, true)
+                .map_err(|e| anyhow!("tokenise: {e}"))?;
+
+            let token_ids: Vec<Vec<u32>> = encodings.iter().map(|e| e.get_ids().to_vec()).collect();
+            let attention_mask: Vec<Vec<u32>> = encodings
+                .iter()
+                .map(|e| e.get_attention_mask().to_vec())
+                .collect();
+
+            let n = token_ids.len();
+            let seq = token_ids[0].len();
+            let ids_flat: Vec<u32> = token_ids.into_iter().flatten().collect();
+            let mask_flat: Vec<u32> = attention_mask.into_iter().flatten().collect();
+            let ids = Tensor::from_vec(ids_flat, (n, seq), &self.device)
+                .map_err(|e| anyhow!("tensor ids: {e}"))?;
+            let mask = Tensor::from_vec(mask_flat, (n, seq), &self.device)
+                .map_err(|e| anyhow!("tensor mask: {e}"))?;
+            let token_type_ids = ids
+                .zeros_like()
+                .map_err(|e| anyhow!("token types: {e}"))?;
+
+            let hidden = self
+                .model
+                .forward(&ids, &token_type_ids, Some(&mask))
+                .map_err(|e| anyhow!("forward: {e}"))?;
+            // Mean-pool with attention mask, then L2-normalise.
+            let mask_f = mask
+                .to_dtype(DType::F32)
+                .map_err(|e| anyhow!("mask cast: {e}"))?
+                .unsqueeze(2)
+                .map_err(|e| anyhow!("mask dim: {e}"))?;
+            let masked = (&hidden * &mask_f).map_err(|e| anyhow!("mul: {e}"))?;
+            let sum = masked
+                .sum(1)
+                .map_err(|e| anyhow!("sum: {e}"))?;
+            let mask_sum = mask_f
+                .sum(1)
+                .map_err(|e| anyhow!("mask sum: {e}"))?
+                .clamp(1e-9, f32::INFINITY)
+                .map_err(|e| anyhow!("clamp: {e}"))?;
+            let mean = (sum / mask_sum).map_err(|e| anyhow!("div: {e}"))?;
+            let norm = mean
+                .sqr()
+                .map_err(|e| anyhow!("sqr: {e}"))?
+                .sum(1)
+                .map_err(|e| anyhow!("norm sum: {e}"))?
+                .sqrt()
+                .map_err(|e| anyhow!("sqrt: {e}"))?
+                .unsqueeze(1)
+                .map_err(|e| anyhow!("norm dim: {e}"))?;
+            let normed = (mean / norm).map_err(|e| anyhow!("norm div: {e}"))?;
+            let vectors: Vec<Vec<f32>> = normed
+                .to_vec2::<f32>()
+                .map_err(|e| anyhow!("to_vec2: {e}"))?;
+            Ok(vectors)
+        }
+    }
+
+    /// Embed a user query with the required "query: " prefix — different
+    /// from stored chunks which use "passage: ".
+    pub fn embed_query(model: &CandleEmbedder, query: &str) -> Result<Vec<f32>> {
+        let v = model.embed_batch(&[format!("query: {}", query)])?;
+        v.into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("candle returned no embedding"))
+    }
+}
+
+#[cfg(not(feature = "candle"))]
+pub mod candle_backend {
+    //! Stub so the rest of the code compiles when the feature is off.
+    use super::*;
+    pub struct CandleEmbedder;
+    impl CandleEmbedder {
+        pub fn dim_const() -> usize {
+            384
+        }
+        pub fn load() -> Result<Self> {
+            bail!(
+                "Local (Candle) embeddings not compiled in. \
+                 Rebuild Datlino with: cargo build --features candle"
+            )
+        }
+    }
+    impl EmbeddingProvider for CandleEmbedder {
+        fn kind(&self) -> EmbeddingProviderKind {
+            EmbeddingProviderKind::Local
+        }
+        fn dim(&self) -> usize {
+            384
+        }
+        fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            bail!("Local embeddings not compiled in")
+        }
+    }
+}
+
 // ---------- Config + factory ----------
 
 const KEYCHAIN_SERVICE: &str = "org.datlino.app";
@@ -225,9 +431,7 @@ pub fn build(kind: EmbeddingProviderKind) -> Result<Box<dyn EmbeddingProvider>> 
                 .ok_or_else(|| anyhow!("Cohere selected but no API key in keychain"))?;
             Ok(Box::new(CohereEmbedder::new(key)))
         }
-        EmbeddingProviderKind::Local => {
-            bail!("Local (Candle) embedder is not compiled in yet; see Week 6.")
-        }
+        EmbeddingProviderKind::Local => Ok(Box::new(candle_backend::CandleEmbedder::load()?)),
     }
 }
 

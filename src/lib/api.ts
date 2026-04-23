@@ -49,6 +49,15 @@ export const api = {
     invoke<EmbedProgress>('set_embedding_provider', { kind }),
   embedPending: () => invoke<EmbedProgress>('embed_pending'),
 
+  // OCR + rephrase
+  getOcrStatus: () =>
+    invoke<{ tesseract: boolean; pdftoppm: boolean; available: boolean }>(
+      'get_ocr_status'
+    ),
+  setAnthropicApiKey: (key: string) =>
+    invoke<void>('set_anthropic_api_key', { key }),
+  anthropicKeyPresent: () => invoke<boolean>('anthropic_key_present'),
+
   // native dialog
   pickFolder: async (): Promise<string | null> => {
     const result = await openDialog({

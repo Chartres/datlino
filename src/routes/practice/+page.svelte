@@ -15,6 +15,9 @@
   let query = $state('');
   let busy = $state(false);
   let error = $state<string | null>(null);
+  let rephraseOn = $state(false);
+  let rephraseStyle = $state<'keystrokes' | 'thing_explainer' | 'both'>('keystrokes');
+  let anthropicPresent = $state(false);
 
   const meta = $derived(modes.find((m) => m.code === selected)!);
 
@@ -23,6 +26,10 @@
     api
       .listChapters()
       .then((c) => (chapters = c))
+      .catch(() => {});
+    api
+      .anthropicKeyPresent()
+      .then((v) => (anthropicPresent = v))
       .catch(() => {});
   });
 
@@ -57,7 +64,10 @@
         pinned_source_prefixes: [],
         content_strategy: isContent ? contentStrategy : undefined,
         chapter_id:
-          isContent && contentStrategy === 'chapter' && chapterId ? chapterId : undefined
+          isContent && contentStrategy === 'chapter' && chapterId ? chapterId : undefined,
+        rephrase: isContent && rephraseOn && anthropicPresent,
+        rephrase_style: isContent && rephraseOn ? rephraseStyle : undefined,
+        language: 'cs'
       });
       if (!plan.sentences.length) {
         error = explainEmpty(selected, contentStrategy);
@@ -225,6 +235,69 @@
           bind:value={query}
         />
       </label>
+    </div>
+  {/if}
+
+  {#if selected === 'content'}
+    <div class="rephrase-card">
+      <label class="toggle">
+        <input
+          type="checkbox"
+          bind:checked={rephraseOn}
+          disabled={!anthropicPresent}
+        />
+        <span>
+          <strong>Remix (LLM přepis)</strong> —
+          {#if anthropicPresent}
+            Claude Haiku si přečte větu, zachová fakta a vlastní jména, a
+            přepíše ji. Původní verzi uvidíš při psaní pod tlačítkem.
+          {:else}
+            Nejdřív ulož Anthropic klíč v <a href="/settings">Nastavení</a>.
+          {/if}
+        </span>
+      </label>
+
+      {#if rephraseOn && anthropicPresent}
+        <div class="style-grid">
+          <button
+            type="button"
+            class="style"
+            class:active={rephraseStyle === 'keystrokes'}
+            onclick={() => (rephraseStyle = 'keystrokes')}
+          >
+            <strong>Klávesy na tvé úrovni</strong>
+            <span>
+              Claude přepíše věty tak, aby obsahovaly víc písmenových
+              kombinací, které právě teď rozjíždíš — ne úplné slabiny, ale
+              ty, co tě táhnou vpřed. Zóna proximálního rozvoje.
+            </span>
+          </button>
+          <button
+            type="button"
+            class="style"
+            class:active={rephraseStyle === 'both'}
+            onclick={() => (rephraseStyle = 'both')}
+          >
+            <strong>Klávesy + jednodušší slovník</strong>
+            <span>
+              Navíc přepíše složitější slova na běžnější. Užitečné, když
+              textu ještě úplně nerozumíš.
+            </span>
+          </button>
+          <button
+            type="button"
+            class="style"
+            class:active={rephraseStyle === 'thing_explainer'}
+            onclick={() => (rephraseStyle = 'thing_explainer')}
+          >
+            <strong>Jen jednodušší slovník</strong>
+            <span>
+              Bonusový režim: přeformuluje do ~1000 nejběžnějších slov
+              (jako Munroeův <em>Thing Explainer</em>), klávesy neřeší.
+            </span>
+          </button>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -396,5 +469,54 @@
     padding: 0.05rem 0.3rem;
     border-radius: 3px;
     font-size: 0.85rem;
+  }
+  .rephrase-card {
+    margin: 0.75rem 0;
+    padding: 0.75rem 1rem;
+    background: #fffaf2;
+    border: 1px solid rgba(28, 25, 23, 0.08);
+    border-radius: 6px;
+  }
+  .toggle {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    color: #44403c;
+    font-size: 0.9rem;
+  }
+  .toggle strong {
+    color: #b3271f;
+  }
+  .toggle a {
+    color: #b3271f;
+  }
+  .style-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+  .style {
+    text-align: left;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid rgba(28, 25, 23, 0.1);
+    background: transparent;
+    border-radius: 5px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .style.active {
+    border-color: #b3271f;
+    background: rgba(179, 39, 31, 0.08);
+  }
+  .style strong {
+    display: block;
+    margin-bottom: 0.2rem;
+    color: #b3271f;
+    font-size: 0.9rem;
+  }
+  .style span {
+    font-size: 0.8rem;
+    color: #57534e;
   }
 </style>

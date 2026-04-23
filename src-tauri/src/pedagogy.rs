@@ -176,6 +176,85 @@ pub struct WeakNgram {
     pub weakness: f64,
 }
 
+/// N-grams in the **zone of proximal development** — stretching, not broken.
+///
+/// Why this exists separately from `weak_ngrams`:
+/// * `weak_ngrams` surfaces the very worst — keys the student can barely
+///   hit at all. Good for the weak-keys *drill* (isolation of difficulty).
+/// * `learning_zone_ngrams` surfaces keys at the edge of fluency — some
+///   errors, some lag, but clearly being learned. Good for the *rephrase*
+///   pass, which injects these into sentences the student already has in
+///   their materials — "push me at my level."
+///
+/// Filter band:
+/// * occurrences ≥ `MIN_OBSERVATIONS` (real signal, not one bad attempt)
+/// * 0.05 ≤ ema_error_rate ≤ 0.30 (improvable, not catastrophic)
+/// * ema_latency above the user's median but below the 90th percentile
+pub fn learning_zone_ngrams(
+    conn: &Connection,
+    user_id: i64,
+    limit: usize,
+) -> Result<Vec<WeakNgram>> {
+    let mut stmt = conn.prepare(
+        "SELECT ngram, occurrences, ema_latency_ms, ema_error_rate
+         FROM ngram_stat
+         WHERE user_id = ?1 AND occurrences >= ?2",
+    )?;
+    let rows: Vec<(String, i64, f64, f64)> = stmt
+        .query_map(params![user_id, MIN_OBSERVATIONS], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+                r.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Percentiles for this user's latency distribution.
+    let mut latencies: Vec<f64> = rows.iter().map(|r| r.2).collect();
+    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p50 = percentile(&latencies, 0.50);
+    let p90 = percentile(&latencies, 0.90);
+    let max_lat = *latencies.last().unwrap_or(&1.0);
+
+    let mut zone: Vec<WeakNgram> = rows
+        .into_iter()
+        .filter(|(_, _, lat, err)| {
+            *err >= 0.05 && *err <= 0.30 && *lat >= p50 && *lat <= p90
+        })
+        .map(|(ngram, occurrences, lat, err)| {
+            // "Stretch" score — prefers mid-error, mid-slow. Errors still
+            // matter more than speed, but we *penalise* very low error
+            // rates (those keys are basically mastered).
+            let err_bell = 1.0 - (err - 0.15).abs() / 0.15; // peaks at 0.15
+            let norm_lat = lat / max_lat.max(1.0);
+            let stretch = 0.6 * err_bell.max(0.0) + 0.4 * norm_lat;
+            WeakNgram {
+                ngram,
+                occurrences,
+                ema_latency_ms: lat,
+                ema_error_rate: err,
+                weakness: stretch,
+            }
+        })
+        .collect();
+    zone.sort_by(|a, b| b.weakness.partial_cmp(&a.weakness).unwrap_or(std::cmp::Ordering::Equal));
+    zone.truncate(limit);
+    Ok(zone)
+}
+
+fn percentile(sorted: &[f64], q: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let idx = ((sorted.len() as f64 - 1.0) * q).round() as usize;
+    sorted[idx.min(sorted.len() - 1)]
+}
+
 /// Top-N weakest n-grams for the pedagogy UI and the weak-keys generator.
 pub fn weak_ngrams(conn: &Connection, user_id: i64, limit: usize) -> Result<Vec<WeakNgram>> {
     let mut stmt = conn.prepare(
@@ -316,6 +395,45 @@ mod tests {
             .unwrap();
         assert_eq!(occ, 2);
         assert!(err_rate.unwrap() > 0.0 && err_rate.unwrap() < 1.0);
+    }
+
+    #[test]
+    fn learning_zone_excludes_mastered_and_broken_keys() {
+        let mut conn = db::open_in_memory().unwrap();
+        // 1) "aaaa" typed cleanly many times — mastered, should NOT appear.
+        for _ in 0..8 {
+            update_stats(&mut conn, 1, &mk_log("aaaa", &[])).unwrap();
+        }
+        // 2) "čšřě" typed with mid-range errors — should appear (zone).
+        for i in 0..8 {
+            // 1 error every 4 strokes across the loop ≈ ~15% error rate
+            let errs: Vec<usize> = if i % 4 == 0 { vec![1] } else { vec![] };
+            update_stats(&mut conn, 1, &mk_log("čšřě", &errs)).unwrap();
+        }
+        // 3) "ŵŵŵ" broken on every keystroke — too hard, isolation
+        //    drill territory; should NOT be in the learning zone.
+        for _ in 0..8 {
+            update_stats(&mut conn, 1, &mk_log("ŵŵŵ", &[0, 1, 2])).unwrap();
+        }
+
+        let zone = learning_zone_ngrams(&conn, 1, 20).unwrap();
+        assert!(!zone.is_empty(), "zone should surface mid-struggle keys");
+        assert!(
+            zone.iter().all(|w| !w.ngram.contains('ŵ')),
+            "fully-broken keys stay OUT of the learning zone: {:?}",
+            zone.iter().map(|w| &w.ngram).collect::<Vec<_>>()
+        );
+        assert!(
+            zone.iter().any(|w| w.ngram.contains('č') || w.ngram.contains('š') || w.ngram.contains('ř') || w.ngram.contains('ě')),
+            "mid-struggle diacritics should appear: {:?}",
+            zone.iter().map(|w| &w.ngram).collect::<Vec<_>>()
+        );
+        // And the fully-mastered "a" shouldn't be in the zone either.
+        assert!(
+            zone.iter().all(|w| !(w.ngram == "a" || w.ngram == "aa" || w.ngram == "aaa")),
+            "mastered keys stay OUT: {:?}",
+            zone.iter().map(|w| &w.ngram).collect::<Vec<_>>()
+        );
     }
 
     #[test]

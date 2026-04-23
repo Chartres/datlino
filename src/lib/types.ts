@@ -7,6 +7,8 @@ export type PracticeMode =
 
 export type ContentStrategy = 'across' | 'chapter' | 'exam_prep';
 
+export type RephraseStyle = 'keystrokes' | 'thing_explainer' | 'both';
+
 export type SessionRequest = {
   mode: PracticeMode;
   alpha: number;
@@ -15,6 +17,9 @@ export type SessionRequest = {
   pinned_source_prefixes?: string[];
   content_strategy?: ContentStrategy;
   chapter_id?: string;
+  rephrase?: boolean;
+  rephrase_style?: RephraseStyle;
+  language?: string;
 };
 
 export type ChapterInfo = {
@@ -30,6 +35,9 @@ export type SessionSentence = {
   text: string;
   source_path: string | null;
   is_generated: boolean;
+  source_text?: string;
+  rephrased_id?: number;
+  similarity?: number;
 };
 
 export type SessionPlan = {

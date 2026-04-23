@@ -290,6 +290,16 @@
     <p class="source">✦ Generovaný drill</p>
   {/if}
 
+  {#if plan.sentences[sentenceIndex]?.source_text}
+    <details class="rephrase">
+      <summary>
+        ✨ Remix (podobnost {((plan.sentences[sentenceIndex]!.similarity ?? 0) * 100).toFixed(0)}% s originálem) —
+        rozbalit původní znění
+      </summary>
+      <p class="original">{plan.sentences[sentenceIndex]?.source_text}</p>
+    </details>
+  {/if}
+
   <p class="hint">
     Piš přímo — žádné klikání. <kbd>Esc</kbd> ukončí sezení. <kbd>Enter</kbd>
     nebo <kbd>mezerník</kbd> přeskočí dokončenou větu, pokud má chybu.
@@ -417,5 +427,23 @@
     padding: 0.05rem 0.3rem;
     font-family: ui-monospace, monospace;
     font-size: 0.75rem;
+  }
+  .rephrase {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(179, 39, 31, 0.04);
+    border: 1px solid rgba(179, 39, 31, 0.2);
+    border-radius: 6px;
+    font-size: 0.85rem;
+  }
+  .rephrase summary {
+    cursor: pointer;
+    color: #b3271f;
+    font-weight: 600;
+  }
+  .rephrase .original {
+    margin: 0.5rem 0 0;
+    color: #57534e;
+    font-family: ui-monospace, monospace;
   }
 </style>

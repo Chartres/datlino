@@ -6,8 +6,10 @@
 pub mod db;
 pub mod embeddings;
 pub mod ingest;
+pub mod ocr;
 pub mod pedagogy;
 pub mod progress;
+pub mod rephrase;
 pub mod search;
 pub mod segmenter;
 pub mod session;
@@ -255,6 +257,28 @@ fn set_embedding_provider(
 }
 
 #[tauri::command]
+fn get_ocr_status() -> std::result::Result<serde_json::Value, String> {
+    let s = ocr::status();
+    Ok(serde_json::json!({
+        "tesseract": s.tesseract,
+        "pdftoppm": s.pdftoppm,
+        "available": ocr::is_available(),
+    }))
+}
+
+#[tauri::command]
+fn set_anthropic_api_key(key: String) -> std::result::Result<(), String> {
+    rephrase::write_anthropic_key(key.trim()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn anthropic_key_present() -> std::result::Result<bool, String> {
+    Ok(rephrase::read_anthropic_key()
+        .map_err(|e| e.to_string())?
+        .is_some())
+}
+
+#[tauri::command]
 fn embed_pending(
     state: State<'_, AppState>,
 ) -> std::result::Result<EmbedProgress, String> {
@@ -333,6 +357,9 @@ pub fn run() {
             set_cohere_api_key,
             set_embedding_provider,
             embed_pending,
+            get_ocr_status,
+            set_anthropic_api_key,
+            anthropic_key_present,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Datlino");

@@ -39,6 +39,16 @@ pdf-extract = "0.7"
 ureq = { version = "2", features = ["json", "tls"] }
 keyring = "2"
 
+# Local embeddings — Candle, HuggingFace's pure-Rust ML stack. Feature-flagged
+# because these crates are heavy (several minutes of first-compile) and add
+# ~15 MB to the binary. The brief §5.3 names multilingual-e5-small as the
+# local model; it's ~120 MB of weights downloaded on first use via hf-hub.
+candle-core = { version = "0.7", optional = true }
+candle-nn = { version = "0.7", optional = true }
+candle-transformers = { version = "0.7", optional = true }
+tokenizers = { version = "0.20", default-features = false, features = ["onig", "http"], optional = true }
+hf-hub = { version = "0.3", optional = true }
+
 # Segmenter
 regex = "1"
 unicode-normalization = "0.1"
@@ -51,10 +61,23 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 anyhow = "1"
 thiserror = "1"
 
-[dev-dependencies]
+# Small tempfile usage at runtime for OCR rasterisation.
 tempfile = "3"
+
+[dev-dependencies]
 
 [features]
 # By default Tauri uses a custom protocol on Windows. Keep this off until
 # we explicitly need it.
 custom-protocol = ["tauri/custom-protocol"]
+
+# Enable local (on-device) embeddings via Candle + multilingual-e5-small.
+# Opt-in because the Candle crates take several minutes to compile on
+# first build. Trigger with: `cargo build --features candle`.
+candle = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    "dep:tokenizers",
+    "dep:hf-hub",
+]

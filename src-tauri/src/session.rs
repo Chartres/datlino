@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::now_unix;
 use crate::embeddings::{self, EmbeddingProviderKind};
 use crate::pedagogy;
+use crate::rephrase::{self, RephraseStyle};
 use crate::search;
 
 const RECENCY_LAMBDA: f64 = 0.15;
@@ -87,6 +88,17 @@ pub struct SessionRequest {
     /// load. Format: "<document_id>::<section>".
     #[serde(default)]
     pub chapter_id: Option<String>,
+    /// Opt in to LLM rephrase mode (brief §5.9). Off by default. Auto-
+    /// disabled for generated / non-chunk sentences and language-class
+    /// material (auto-detection is a TODO — caller supplies the language).
+    #[serde(default)]
+    pub rephrase: bool,
+    /// When `rephrase == true`, which recipe to use. Defaults to Keystrokes.
+    #[serde(default)]
+    pub rephrase_style: Option<RephraseStyle>,
+    /// Language hint fed to the LLM system prompt. "cs" / "sk" / "en" / "de".
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 impl Default for SessionRequest {
@@ -99,6 +111,9 @@ impl Default for SessionRequest {
             pinned_source_prefixes: Vec::new(),
             content_strategy: None,
             chapter_id: None,
+            rephrase: false,
+            rephrase_style: None,
+            language: None,
         }
     }
 }
@@ -107,9 +122,22 @@ impl Default for SessionRequest {
 pub struct SessionSentence {
     /// `None` for generated drills (Diacritics fallback strings).
     pub chunk_id: Option<i64>,
+    /// What the student actually types — either the verbatim source or an
+    /// LLM-rephrased variant.
     pub text: String,
     pub source_path: Option<String>,
     pub is_generated: bool,
+    /// When the rephrase pipeline produced an accepted rewrite, the
+    /// verbatim source is mirrored here so the UI can show "Originál ↔
+    /// Remix" and the student can toggle back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<String>,
+    /// `rephrased_chunk.id` when a rewrite is attached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rephrased_id: Option<i64>,
+    /// Cosine(source, rephrase) against the active embedding provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity: Option<f32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -132,7 +160,7 @@ pub fn create_session(
     user_id: i64,
     req: &SessionRequest,
 ) -> Result<SessionPlan> {
-    let sentences = match req.mode {
+    let mut sentences = match req.mode {
         PracticeMode::Content => match req.content_strategy.unwrap_or(ContentStrategy::Across) {
             ContentStrategy::Across => pick_content(conn, user_id, req)?,
             ContentStrategy::Chapter => pick_chapter(conn, req)?,
@@ -143,6 +171,16 @@ pub fn create_session(
         PracticeMode::WeakKeys => pick_weak_keys(conn, user_id, req)?,
         PracticeMode::Hybrid => pick_hybrid(conn, user_id, req)?,
     };
+
+    // Optional rephrase pass — only for Content mode with backing chunks.
+    // Failures (missing key, network error, similarity gate rejection)
+    // leave the verbatim sentence in place; the student never gets a
+    // broken session.
+    if req.rephrase && matches!(req.mode, PracticeMode::Content) {
+        if let Err(e) = apply_rephrase(conn, user_id, &mut sentences, req) {
+            eprintln!("[datlino] rephrase pass failed, continuing with verbatim: {e}");
+        }
+    }
 
     let tx = conn.transaction()?;
     tx.execute(
@@ -205,6 +243,9 @@ fn pick_content(
             text,
             source_path,
             is_generated: false,
+            source_text: None,
+            rephrased_id: None,
+            similarity: None,
         });
     }
     Ok(out)
@@ -269,6 +310,9 @@ fn pick_across(
                 text,
                 source_path: Some(h.source_path),
                 is_generated: false,
+                source_text: None,
+                rephrased_id: None,
+                similarity: None,
             });
             if total >= budget {
                 break;
@@ -320,6 +364,9 @@ fn pick_chapter(
             text,
             source_path: Some(src),
             is_generated: false,
+            source_text: None,
+            rephrased_id: None,
+            similarity: None,
         });
         if total >= budget * 2 {
             // Chapters can exceed the budget — let them; longer passages
@@ -420,6 +467,9 @@ fn pick_exam_prep(
                 text,
                 source_path: Some(src.clone()),
                 is_generated: false,
+                source_text: None,
+                rephrased_id: None,
+                similarity: None,
             });
             if total >= budget * 2 {
                 break;
@@ -506,6 +556,77 @@ fn embedding_relevance(
         out.insert(id, ((s - min_s) / span) as f64);
     }
     Ok(Some(out))
+}
+
+fn apply_rephrase(
+    conn: &Connection,
+    user_id: i64,
+    sentences: &mut [SessionSentence],
+    req: &SessionRequest,
+) -> Result<()> {
+    // Zone-of-proximal-development n-grams (keys pushing the student at
+    // their level, not the totally-broken ones — those go in the isolated
+    // weak-keys drill). Fall back to the full weak list if the user is too
+    // new to have a meaningful zone yet.
+    let zone = pedagogy::learning_zone_ngrams(conn, user_id, 12)?;
+    let weak_list: Vec<String> = if zone.is_empty() {
+        pedagogy::weak_ngrams(conn, user_id, 12)?
+            .into_iter()
+            .map(|w| w.ngram)
+            .collect()
+    } else {
+        zone.into_iter().map(|w| w.ngram).collect()
+    };
+    let language = req.language.as_deref().unwrap_or("cs");
+    let style = req.rephrase_style.unwrap_or(RephraseStyle::Keystrokes);
+
+    // Need an embedding provider for the similarity gate. Build from
+    // current profile; if none configured, fall back to the Fake provider
+    // — cosine on character-bigram hashes still distinguishes "same
+    // meaning" from "drifted".
+    let (provider_str, _): (String, i64) = conn.query_row(
+        "SELECT provider, dim FROM embedding_meta WHERE id = 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let kind = EmbeddingProviderKind::parse(&provider_str);
+    let provider = embeddings::build(match kind {
+        EmbeddingProviderKind::None => EmbeddingProviderKind::Fake,
+        other => other,
+    })?;
+
+    for s in sentences.iter_mut() {
+        let Some(chunk_id) = s.chunk_id else { continue };
+        if s.is_generated {
+            continue;
+        }
+        let request = rephrase::RephraseRequest {
+            source: &s.text,
+            weak_ngrams: &weak_list,
+            language,
+            style,
+            similarity_floor: None,
+        };
+        match rephrase::rephrase_sentence(&request, &*provider) {
+            Ok(outcome) if outcome.accepted => {
+                let id = rephrase::store_rephrase(conn, chunk_id, &outcome, &weak_list)?;
+                s.source_text = Some(std::mem::replace(&mut s.text, outcome.text));
+                s.rephrased_id = Some(id);
+                s.similarity = Some(outcome.similarity);
+            }
+            Ok(outcome) => {
+                // Below the similarity floor — drop the rewrite silently.
+                eprintln!(
+                    "[datlino] rephrase drifted (sim {:.2}); using verbatim",
+                    outcome.similarity
+                );
+            }
+            Err(e) => {
+                eprintln!("[datlino] rephrase error: {e}");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_chapter_id(s: &str) -> Option<(i64, String)> {
@@ -598,6 +719,9 @@ fn pick_warmup(conn: &Connection, req: &SessionRequest) -> Result<Vec<SessionSen
             text,
             source_path: Some(source_path),
             is_generated: false,
+            source_text: None,
+            rephrased_id: None,
+            similarity: None,
         });
     }
     if out.is_empty() {
@@ -625,6 +749,9 @@ fn pick_diacritics(conn: &Connection, req: &SessionRequest) -> Result<Vec<Sessio
             text,
             source_path: None,
             is_generated: true,
+            source_text: None,
+            rephrased_id: None,
+            similarity: None,
         });
         if total >= budget / 3 {
             break;
@@ -649,6 +776,9 @@ fn pick_diacritics(conn: &Connection, req: &SessionRequest) -> Result<Vec<Sessio
             text,
             source_path: None,
             is_generated: true,
+            source_text: None,
+            rephrased_id: None,
+            similarity: None,
         });
         if total >= 2 * budget / 3 {
             break;
@@ -683,6 +813,9 @@ fn pick_diacritics(conn: &Connection, req: &SessionRequest) -> Result<Vec<Sessio
             text,
             source_path: Some(source_path),
             is_generated: false,
+            source_text: None,
+            rephrased_id: None,
+            similarity: None,
         });
     }
 
@@ -723,6 +856,9 @@ fn pick_weak_keys(
             text,
             source_path: Some(source_path),
             is_generated: false,
+            source_text: None,
+            rephrased_id: None,
+            similarity: None,
         });
     }
     // Top up with Diacritic drills if the corpus didn't yield enough density.
@@ -802,6 +938,9 @@ fn pick_hybrid(
             text,
             source_path: Some(src),
             is_generated: false,
+            source_text: None,
+            rephrased_id: None,
+            similarity: None,
         });
     }
     if out.is_empty() {
@@ -913,6 +1052,9 @@ fn builtin_warmup_drills() -> Vec<SessionSentence> {
         text: (*t).to_string(),
         source_path: None,
         is_generated: true,
+        source_text: None,
+        rephrased_id: None,
+        similarity: None,
     })
     .collect()
 }
@@ -949,6 +1091,9 @@ mod tests {
             pinned_source_prefixes: vec![],
             content_strategy: None,
             chapter_id: None,
+        rephrase: false,
+            rephrase_style: None,
+            language: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -967,6 +1112,9 @@ mod tests {
             pinned_source_prefixes: vec![],
             content_strategy: None,
             chapter_id: None,
+        rephrase: false,
+            rephrase_style: None,
+            language: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -985,6 +1133,9 @@ mod tests {
             pinned_source_prefixes: vec![],
             content_strategy: None,
             chapter_id: None,
+        rephrase: false,
+            rephrase_style: None,
+            language: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1012,6 +1163,9 @@ mod tests {
             pinned_source_prefixes: vec![],
             content_strategy: Some(ContentStrategy::Across),
             chapter_id: None,
+        rephrase: false,
+            rephrase_style: None,
+            language: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         let sources: std::collections::HashSet<_> = plan
@@ -1051,6 +1205,9 @@ mod tests {
             pinned_source_prefixes: vec![],
             content_strategy: Some(ContentStrategy::Chapter),
             chapter_id: Some(chapter_id),
+        rephrase: false,
+            rephrase_style: None,
+            language: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert_eq!(
@@ -1085,6 +1242,9 @@ mod tests {
             pinned_source_prefixes: vec![],
             content_strategy: Some(ContentStrategy::ExamPrep),
             chapter_id: None,
+        rephrase: false,
+            rephrase_style: None,
+            language: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1118,6 +1278,9 @@ mod tests {
             pinned_source_prefixes: vec![],
             content_strategy: None,
             chapter_id: None,
+        rephrase: false,
+            rephrase_style: None,
+            language: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1134,6 +1297,9 @@ mod tests {
             pinned_source_prefixes: vec![],
             content_strategy: None,
             chapter_id: None,
+        rephrase: false,
+            rephrase_style: None,
+            language: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         let n: i64 = conn

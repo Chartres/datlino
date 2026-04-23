@@ -4,7 +4,13 @@
 
   let status = $state<EmbeddingStatus | null>(null);
   let cohereKey = $state('');
+  let anthropicKey = $state('');
+  let anthropicPresent = $state(false);
+  let ocr = $state<{ tesseract: boolean; pdftoppm: boolean; available: boolean } | null>(
+    null
+  );
   let savingKey = $state(false);
+  let savingAnth = $state(false);
   let switching = $state<EmbeddingProviderKind | null>(null);
   let embedRunning = $state(false);
   let message = $state<string | null>(null);
@@ -16,10 +22,28 @@
 
   async function refresh() {
     try {
-      status = await api.getEmbeddingStatus();
+      [status, ocr, anthropicPresent] = await Promise.all([
+        api.getEmbeddingStatus(),
+        api.getOcrStatus(),
+        api.anthropicKeyPresent()
+      ]);
       error = null;
     } catch (e) {
       error = String(e);
+    }
+  }
+
+  async function saveAnthropic() {
+    savingAnth = true;
+    try {
+      await api.setAnthropicApiKey(anthropicKey);
+      anthropicKey = '';
+      await refresh();
+      message = 'Anthropic klíč uložen.';
+    } catch (e) {
+      error = String(e);
+    } finally {
+      savingAnth = false;
     }
   }
 
@@ -143,11 +167,17 @@
         </span>
       </button>
 
-      <button class="tile disabled" disabled>
+      <button
+        class="tile"
+        class:active={status.provider === 'local'}
+        disabled={switching !== null}
+        onclick={() => pick('local')}
+      >
         <strong>Lokální Candle</strong>
         <span>
-          Multilingual-e5-small (~120 MB). Zatím není zkompilováno —
-          přijde v pozdějším týdnu.
+          Multilingual-e5-small (~120 MB). Nic neodchází ze zařízení. První
+          použití stáhne model; kompilace vyžaduje
+          <code>cargo build --features candle</code>.
         </span>
       </button>
     </div>
@@ -180,6 +210,65 @@
     </form>
   </section>
 {/if}
+
+{#if ocr}
+  <section class="card">
+    <h3>OCR (skenované PDF a GoodNotes)</h3>
+    <p class="muted">
+      Když PDF obsahuje jen obrázky (např. export z GoodNotes nebo naskenovaná
+      učebnice), Datlino si přečte text pomocí
+      <code>tesseract</code> + <code>pdftoppm</code>.
+    </p>
+    <ul class="binlist">
+      <li>
+        <code>tesseract</code>:
+        {#if ocr.tesseract}<span class="ok">k dispozici</span>{:else}<span class="warn">chybí</span>{/if}
+      </li>
+      <li>
+        <code>pdftoppm</code>:
+        {#if ocr.pdftoppm}<span class="ok">k dispozici</span>{:else}<span class="warn">chybí</span>{/if}
+      </li>
+    </ul>
+    {#if !ocr.available}
+      <p class="muted small">
+        Na macOS: <code>brew install tesseract tesseract-lang poppler</code>.
+        Na Ubuntu/Debian:
+        <code>apt install tesseract-ocr tesseract-ocr-ces tesseract-ocr-slk tesseract-ocr-eng poppler-utils</code>.
+      </p>
+    {/if}
+  </section>
+{/if}
+
+<section class="card">
+  <h3>Rephrase mode (volitelný)</h3>
+  <p class="muted">
+    Režim, který s pomocí LLM přepíše věty z tvých materiálů tak, aby
+    obsahovaly tvé aktuálně slabé kombinace kláves. Implementace Claude API
+    (model <code>claude-haiku-4-5</code>). Klíč se ukládá do klíčenky
+    operačního systému. Před použitím každé rephrase se porovná podobnost
+    s původní větou; drift > 15 % se zahazuje.
+    {#if anthropicPresent}
+      <br /><strong>Anthropic klíč uložen.</strong> Režim lze zapnout u
+      každého sezení zvlášť.
+    {/if}
+  </p>
+  <form
+    onsubmit={(e) => {
+      e.preventDefault();
+      saveAnthropic();
+    }}
+  >
+    <input
+      type="password"
+      placeholder="sk-ant-XXXXXXXXXXXXXXXX…"
+      bind:value={anthropicKey}
+      disabled={savingAnth}
+    />
+    <button class="primary" type="submit" disabled={savingAnth}>
+      {savingAnth ? 'Ukládám…' : 'Uložit'}
+    </button>
+  </form>
+</section>
 
 {#if message}
   <p class="msg ok">{message}</p>
@@ -229,10 +318,6 @@
   .tile.active {
     border-color: #b3271f;
     background: rgba(179, 39, 31, 0.06);
-  }
-  .tile.disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
   .tile strong {
     display: block;
@@ -297,5 +382,32 @@
     background: rgba(179, 39, 31, 0.08);
     color: #b3271f;
     border: 1px solid rgba(179, 39, 31, 0.2);
+  }
+  .binlist {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0;
+    display: flex;
+    gap: 1.5rem;
+  }
+  .binlist li {
+    font-size: 0.9rem;
+  }
+  .ok {
+    color: #2d6a2d;
+    font-weight: 600;
+  }
+  .warn {
+    color: #b3271f;
+    font-weight: 600;
+  }
+  .small {
+    font-size: 0.8rem;
+  }
+  code {
+    background: rgba(28, 25, 23, 0.05);
+    padding: 0.05rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.85rem;
   }
 </style>

@@ -226,9 +226,47 @@ fn read_document(path: &Path, kind: DocKind) -> Result<String> {
                 .with_context(|| format!("reading pdf {}", path.display()))?;
             let extracted = pdf_extract::extract_text_from_mem(&bytes)
                 .map_err(|e| anyhow::anyhow!("pdf-extract: {e}"))?;
-            Ok(clean_pdf_text(&extracted))
+            let cleaned = clean_pdf_text(&extracted);
+            // If the text layer is suspiciously thin, this is likely a
+            // scanned PDF / GoodNotes export. Hand it to Tesseract if we
+            // have the binaries. Failure falls back to whatever text we
+            // did extract — no panic.
+            let page_count = estimate_page_count(&bytes);
+            if crate::ocr::looks_image_only(cleaned.chars().count(), page_count)
+                && crate::ocr::is_available()
+            {
+                match crate::ocr::extract_with_tesseract(path, None) {
+                    Ok(ocr_text) if ocr_text.chars().count() > cleaned.chars().count() => {
+                        return Ok(ocr_text);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(cleaned)
         }
     }
+}
+
+/// Count PDF pages by scraping `/Type /Page` occurrences — exact enough for
+/// the image-only heuristic, avoids pulling in a parser just for a page
+/// count.
+fn estimate_page_count(bytes: &[u8]) -> usize {
+    let needle = b"/Type /Page";
+    let mut count = 0usize;
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            // Skip "/Type /Pages" (the page *tree* object).
+            let tail = &bytes[i + needle.len()..(i + needle.len() + 1).min(bytes.len())];
+            if tail != b"s" {
+                count += 1;
+            }
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+    count.max(1)
 }
 
 /// PDFs often extract with per-line hard breaks inside paragraphs, stray

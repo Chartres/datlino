@@ -199,6 +199,23 @@ const MIGRATIONS: &[&str] = &[
         VALUES (1, 'none', 0, strftime('%s','now'))
         ON CONFLICT(id) DO NOTHING;
     "#,
+    // 0006 — rephrased_chunk table for the LLM rephrase mode (brief §5.9).
+    // Each row is an LLM-generated rewrite of a source `chunk`, constrained
+    // to preserve factual claims while seeding weak n-grams. The UI always
+    // exposes the source alongside so the student can toggle back to the
+    // verbatim text — preserves the trust contract with parents.
+    r#"
+    CREATE TABLE IF NOT EXISTS rephrased_chunk (
+        id INTEGER PRIMARY KEY,
+        source_chunk_id INTEGER NOT NULL REFERENCES chunk(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        target_ngrams TEXT,
+        generator_model TEXT,
+        similarity_to_source REAL,
+        created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_rephrased_source ON rephrased_chunk(source_chunk_id);
+    "#,
 ];
 
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
