@@ -1,0 +1,49 @@
+[package]
+name = "datlino"
+version = "0.1.0"
+description = "Datlino — touch-typing trainer for Czech and Slovak high school students"
+authors = ["Paja Dravec"]
+edition = "2021"
+rust-version = "1.77"
+license = "UNLICENSED"
+
+# The library carries the actual logic so it can be unit-tested without
+# pulling in Tauri's GUI runtime. `main.rs` is just the binary shim that
+# starts the Tauri runtime.
+[lib]
+name = "datlino_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Storage: system SQLite (3.45+, ships with FTS5). `bundled` + `sqlite-vec`
+# are intentionally deferred to Week 2 when embeddings land.
+rusqlite = { version = "0.31", features = ["functions"] }
+
+# Ingestion + watching
+notify = "6"
+sha2 = "0.10"
+
+# Segmenter
+regex = "1"
+unicode-normalization = "0.1"
+once_cell = "1"
+
+# Errors
+anyhow = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+# By default Tauri uses a custom protocol on Windows. Keep this off until
+# we explicitly need it.
+custom-protocol = ["tauri/custom-protocol"]

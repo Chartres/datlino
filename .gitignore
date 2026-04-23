@@ -1,0 +1,27 @@
+# Node / SvelteKit
+node_modules
+.svelte-kit
+build
+dist
+.vite
+
+# Tauri / Rust
+src-tauri/target
+src-tauri/gen
+target
+
+# OS / editor
+.DS_Store
+.idea
+.vscode
+
+# Local data (Datlino runtime db lives in user data dir, but never commit any local copies)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+/datlino.db*
+
+# Env
+.env
+.env.local
