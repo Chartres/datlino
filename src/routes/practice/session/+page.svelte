@@ -62,6 +62,13 @@
 
   let surfaceEl = $state<HTMLElement | null>(null);
 
+  // Some OS/browser combos fire both `compositionend` AND a follow-up
+  // keydown carrying the final composed char (macOS/WebKit with some CZ
+  // input methods does this). We swallow the duplicate by remembering
+  // what we just accepted via composition.
+  let lastComposedChar: string | null = null;
+  let lastComposedAt = 0;
+
   // Initialise / reset per-sentence state whenever the target changes.
   $effect(() => {
     if (!target) return;
@@ -126,6 +133,24 @@
   // "wrong character", every ř/č/š would look like a two-key failure.
   // So: skip keys during composition, skip the literal "Dead" key, and
   // hand composed text to `acceptChar` via the compositionend handler.
+  //
+  // Not every OS/layout uses the `"Dead"` sentinel — some (macOS, a few
+  // Windows Czech layouts) deliver the standalone spacing diacritic
+  // character directly (ˇ, ´, ˘, ¨, ˜, `, ^, ˚). Treat the full set as
+  // pass-through too so `řídí` records as one correct keystroke on each
+  // character regardless of the input method.
+  const DEAD_KEY_CHARS = new Set([
+    'ˇ', // caron (háček)
+    '´', // acute (čárka)
+    '˘', // breve
+    '¨', // diaeresis
+    '˜', // small tilde
+    '`', // grave
+    '^', // circumflex
+    '˚', // ring above
+    'Unidentified' // some browsers emit this mid-composition
+  ]);
+
   function handleKey(ev: KeyboardEvent) {
     if (!target) return;
     if (submitting) return;
@@ -151,6 +176,7 @@
 
     // Dead-key pass-through — we wait for the final composed char.
     if (ev.key === 'Dead' || ev.isComposing || ev.keyCode === 229) return;
+    if (DEAD_KEY_CHARS.has(ev.key)) return;
 
     // Single-char keys only. Modifier keys like Shift alone produce `.key`
     // with multi-char names (Shift, Control, Meta, ...) and get ignored.
@@ -162,6 +188,18 @@
     // compositionend.
     if (ev.altKey) return;
 
+    // De-dupe: some OSes fire compositionend AND a follow-up keydown
+    // carrying the same character. Skip the second hit if it arrives
+    // within 80 ms.
+    if (
+      lastComposedChar === ch &&
+      performance.now() - lastComposedAt < 80
+    ) {
+      lastComposedChar = null;
+      ev.preventDefault();
+      return;
+    }
+
     ev.preventDefault();
     acceptChar(ch === 'Enter' ? '\n' : ch);
   }
@@ -172,8 +210,15 @@
     if (!data) return;
     // compositionend can deliver one codepoint (CZ dead key → ř) or
     // several (some CJK IMEs); we iterate to be safe.
-    for (const ch of Array.from(data)) {
+    const chars = Array.from(data);
+    for (const ch of chars) {
       acceptChar(ch);
+    }
+    // Remember the last composed codepoint so the de-dupe in handleKey
+    // can swallow a duplicate keydown that some OSes fire right after.
+    if (chars.length > 0) {
+      lastComposedChar = chars[chars.length - 1];
+      lastComposedAt = performance.now();
     }
   }
 
