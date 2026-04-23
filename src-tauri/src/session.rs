@@ -23,6 +23,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::db::now_unix;
+use crate::embeddings::{self, EmbeddingProviderKind};
 use crate::pedagogy;
 use crate::search;
 
@@ -342,34 +343,54 @@ fn pick_exam_prep(
         return Ok(Vec::new());
     };
 
-    // Each whitespace-separated token becomes its own BM25 query; aggregate
-    // score per (document, section) gives us a chapter ranking.
-    let tokens: Vec<&str> = q
+    // Dedup + length filter so short stopwords don't flood the scorer.
+    let mut seen = std::collections::HashSet::new();
+    let tokens: Vec<String> = q
         .split_whitespace()
         .filter(|t| t.chars().count() >= 3)
+        .map(|t| t.to_lowercase())
+        .filter(|t| seen.insert(t.clone()))
         .collect();
-    let queries: Vec<&str> = if tokens.is_empty() { vec![q] } else { tokens };
+    let queries: Vec<String> = if tokens.is_empty() {
+        vec![q.to_string()]
+    } else {
+        tokens
+    };
 
+    // Rank chapters by aggregate BM25 across all tokens. One SQL per token
+    // with the section joined inline — no N+1 lookups.
     let mut chapter_scores: HashMap<(i64, String), (f64, String)> = HashMap::new();
     for qq in &queries {
-        let hits = search::search(conn, qq, 80)?;
-        for h in hits {
-            if !source_allowed(&h.source_path, &req.pinned_source_prefixes) {
+        let match_expr = search::build_match_expression(qq);
+        if match_expr.is_empty() {
+            continue;
+        }
+        let mut stmt = conn.prepare(
+            "SELECT c.document_id, c.section, d.source_path, bm25(chunk_fts) AS bm
+             FROM chunk_fts
+             JOIN chunk    c ON c.id = chunk_fts.rowid
+             JOIN document d ON d.id = c.document_id
+             WHERE chunk_fts MATCH ?1
+             ORDER BY bm ASC
+             LIMIT 80",
+        )?;
+        let rows = stmt.query_map(params![&match_expr], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                -r.get::<_, f64>(3)?, // SQLite bm25 is lower-better; flip.
+            ))
+        })?;
+        for row in rows {
+            let (doc_id, section, source_path, score) = row?;
+            if !source_allowed(&source_path, &req.pinned_source_prefixes) {
                 continue;
             }
-            // Look up the section of this hit chunk.
-            let section: String = conn
-                .query_row(
-                    "SELECT section FROM chunk WHERE id = ?1",
-                    params![h.chunk_id],
-                    |r| r.get(0),
-                )
-                .unwrap_or_default();
-            let key = (h.document_id, section);
             let entry = chapter_scores
-                .entry(key)
-                .or_insert_with(|| (0.0, h.source_path.clone()));
-            entry.0 += h.score;
+                .entry((doc_id, section))
+                .or_insert_with(|| (0.0, source_path));
+            entry.0 += score;
         }
     }
     let mut ranked: Vec<_> = chapter_scores.into_iter().collect();
@@ -409,6 +430,82 @@ fn pick_exam_prep(
         }
     }
     Ok(out)
+}
+
+/// Build a chunk_id → cosine(query, chunk) map using the active embedding
+/// provider, or return `None` if no provider is configured / no chunks
+/// are embedded yet. Values are scaled to [0, 1] to blend with the α mix.
+fn embedding_relevance(
+    conn: &Connection,
+    query: &str,
+) -> Result<Option<std::collections::HashMap<i64, f64>>> {
+    use std::collections::HashMap;
+
+    // Read the active provider off embedding_meta. "none" or dim 0 means
+    // no embeddings to consult — bail and let caller fall back to BM25.
+    let (provider, dim): (String, i64) = conn.query_row(
+        "SELECT provider, dim FROM embedding_meta WHERE id = 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let kind = EmbeddingProviderKind::parse(&provider);
+    if matches!(kind, EmbeddingProviderKind::None) || dim == 0 {
+        return Ok(None);
+    }
+
+    // Do we actually have any embedded chunks? If not, don't spend a
+    // provider call on the query.
+    let embedded_count: i64 = conn.query_row(
+        "SELECT count(*) FROM chunk WHERE embedding IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    if embedded_count == 0 {
+        return Ok(None);
+    }
+
+    let provider = match embeddings::build(kind) {
+        Ok(p) => p,
+        Err(_) => return Ok(None), // misconfigured (e.g. Cohere key missing) → fall back
+    };
+    let q_vecs = provider.embed_batch(&[query.to_string()])?;
+    let q_vec = q_vecs
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("embedding provider returned no vector"))?;
+
+    let mut stmt =
+        conn.prepare("SELECT id, embedding FROM chunk WHERE embedding IS NOT NULL")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+    })?;
+
+    let mut sims: Vec<(i64, f32)> = Vec::new();
+    let mut min_s = f32::INFINITY;
+    let mut max_s = f32::NEG_INFINITY;
+    for row in rows {
+        let (id, blob) = row?;
+        let v = embeddings::blob_to_vec(&blob);
+        let s = embeddings::cosine_similarity(&q_vec, &v);
+        sims.push((id, s));
+        if s < min_s {
+            min_s = s;
+        }
+        if s > max_s {
+            max_s = s;
+        }
+    }
+    if sims.is_empty() {
+        return Ok(None);
+    }
+    // Rescale cosine [−1, 1] → [0, 1] relative to this query's spread so
+    // the blend with pedagogy_density is well-calibrated.
+    let span = (max_s - min_s).max(1e-6);
+    let mut out: HashMap<i64, f64> = HashMap::with_capacity(sims.len());
+    for (id, s) in sims {
+        out.insert(id, ((s - min_s) / span) as f64);
+    }
+    Ok(Some(out))
 }
 
 fn parse_chapter_id(s: &str) -> Option<(i64, String)> {
@@ -641,8 +738,9 @@ fn pick_weak_keys(
     Ok(out)
 }
 
-/// Full brief §2 formula. Relevance is BM25-normalised for now; embeddings
-/// arrive in Week 2.
+/// Full brief §2 formula. When a real embedding provider is configured
+/// AND the query is non-empty, relevance is cosine(query_emb, chunk_emb).
+/// Otherwise we fall back to normalised BM25 — always works, no network.
 fn pick_hybrid(
     conn: &Connection,
     user_id: i64,
@@ -652,13 +750,17 @@ fn pick_hybrid(
     let weak = pedagogy::weak_ngrams(conn, user_id, 20)?;
     let budget = char_budget(req.target_duration_s);
 
-    // Relevance signal — normalised BM25 over the query if given.
+    // Relevance signal — prefer embeddings when available, BM25 otherwise.
     let mut relevance: std::collections::HashMap<i64, f64> = Default::default();
     if let Some(q) = req.query.as_deref().filter(|s| !s.trim().is_empty()) {
-        let hits = search::search(conn, q, 500)?;
-        let max = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max).max(1.0);
-        for h in hits {
-            relevance.insert(h.chunk_id, (h.score / max).max(0.0));
+        if let Some(by_cosine) = embedding_relevance(conn, q)? {
+            relevance = by_cosine;
+        } else {
+            let hits = search::search(conn, q, 500)?;
+            let max = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max).max(1.0);
+            for h in hits {
+                relevance.insert(h.chunk_id, (h.score / max).max(0.0));
+            }
         }
     }
 
@@ -921,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn chapter_strategy_returns_full_section_in_order() {
+    fn chapter_strategy_returns_full_section_in_source_order() {
         let mut conn = db::open_in_memory().unwrap();
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("dejiny.md");
@@ -933,7 +1035,11 @@ mod tests {
         ingest::ingest_file(&mut conn, &p).unwrap();
 
         let doc_id: i64 = conn
-            .query_row("SELECT id FROM document WHERE source_path LIKE '%dejiny.md'", [], |r| r.get(0))
+            .query_row(
+                "SELECT id FROM document WHERE source_path LIKE '%dejiny.md'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         let chapter_id = format!("{}::Dejiny 20. stoleti > Great Depression", doc_id);
 
@@ -947,7 +1053,15 @@ mod tests {
             chapter_id: Some(chapter_id),
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
-        assert_eq!(plan.sentences.len(), 3, "should return all 3 sentences of the Great Depression chapter");
+        assert_eq!(
+            plan.sentences.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
+            vec![
+                "Prvni veta sekce o krize.",
+                "Druha veta o dopadech.",
+                "Treti veta o reakci vlad.",
+            ],
+            "chapter mode must preserve source order exactly"
+        );
         assert!(plan.sentences.iter().all(|s| !s.text.contains("Studena valka")));
     }
 

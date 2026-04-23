@@ -27,6 +27,34 @@ fn ingests_all_cz_fixtures() {
 }
 
 #[test]
+fn ingests_pdf_fixture_through_pdf_extract() {
+    let mut conn = db::open_in_memory().unwrap();
+    ingest::ingest_tree(&mut conn, &fixtures_root()).unwrap();
+
+    let pdf_chunks: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM chunk c
+             JOIN document d ON d.id = c.document_id
+             WHERE d.kind = 'pdf'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        pdf_chunks >= 5,
+        "expected the PDF fixture to produce at least a handful of chunks, got {pdf_chunks}"
+    );
+
+    // BM25 search across the whole corpus should find PDF content.
+    let hits = search::search(&conn, "Roosevelt", 5).unwrap();
+    assert!(
+        hits.iter().any(|h| h.source_path.ends_with(".pdf")),
+        "search should surface PDF content: {:?}",
+        hits.iter().map(|h| &h.source_path).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn finds_habsburg_content() {
     let mut conn = db::open_in_memory().unwrap();
     ingest::ingest_tree(&mut conn, &fixtures_root()).unwrap();

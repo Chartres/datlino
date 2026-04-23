@@ -11,7 +11,8 @@
   const navItems = [
     { href: '/', label: 'Knihovna' },
     { href: '/practice', label: 'Trénink' },
-    { href: '/progress', label: 'Pokrok' }
+    { href: '/progress', label: 'Pokrok' },
+    { href: '/settings', label: 'Nastavení' }
   ];
 
   function isActive(href: string, pathname: string): boolean {

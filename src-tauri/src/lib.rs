@@ -4,6 +4,7 @@
 //! the runtime modules. `main.rs` is a thin shim that calls `run()`.
 
 pub mod db;
+pub mod embeddings;
 pub mod ingest;
 pub mod pedagogy;
 pub mod progress;
@@ -57,7 +58,21 @@ fn add_watched_folder(
     if !p.exists() {
         return Err(format!("path does not exist: {path}"));
     }
-    state.watcher.add_root(p).map_err(|e| e.to_string())
+    let canonical = std::fs::canonicalize(&p)
+        .map(|c| c.to_string_lossy().to_string())
+        .unwrap_or(path);
+    {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR IGNORE INTO watched_folder(path, added_at) VALUES (?1, strftime('%s','now'))",
+            rusqlite::params![&canonical],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    state
+        .watcher
+        .add_root(PathBuf::from(canonical))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -65,6 +80,14 @@ fn remove_watched_folder(
     path: String,
     state: State<'_, AppState>,
 ) -> std::result::Result<(), String> {
+    {
+        let conn = state.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM watched_folder WHERE path = ?1",
+            rusqlite::params![&path],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     state
         .watcher
         .remove_root(PathBuf::from(path))
@@ -153,6 +176,109 @@ fn list_chapters(
     session::list_chapters(&conn).map_err(|e| e.to_string())
 }
 
+// ---------- embedding provider + settings ----------
+
+#[derive(Debug, Serialize)]
+pub struct EmbeddingStatus {
+    pub provider: String,
+    pub dim: i64,
+    pub embedded_chunks: i64,
+    pub total_chunks: i64,
+    pub cohere_key_present: bool,
+}
+
+#[tauri::command]
+fn get_embedding_status(
+    state: State<'_, AppState>,
+) -> std::result::Result<EmbeddingStatus, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let (provider, dim): (String, i64) = conn
+        .query_row(
+            "SELECT provider, dim FROM embedding_meta WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let embedded_chunks: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM chunk WHERE embedding IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let total_chunks: i64 = conn
+        .query_row("SELECT count(*) FROM chunk", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let cohere_key_present = embeddings::read_cohere_key()
+        .ok()
+        .flatten()
+        .is_some();
+    Ok(EmbeddingStatus {
+        provider,
+        dim,
+        embedded_chunks,
+        total_chunks,
+        cohere_key_present,
+    })
+}
+
+#[tauri::command]
+fn set_cohere_api_key(key: String) -> std::result::Result<(), String> {
+    embeddings::write_cohere_key(key.trim()).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmbedProgress {
+    pub embedded: usize,
+    pub total_chunks: i64,
+}
+
+#[tauri::command]
+fn set_embedding_provider(
+    kind: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<EmbedProgress, String> {
+    let kind = embeddings::EmbeddingProviderKind::parse(&kind);
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let provider = embeddings::build(kind).map_err(|e| e.to_string())?;
+    embeddings::ensure_vec_table_matches(&conn, kind, provider.dim())
+        .map_err(|e| e.to_string())?;
+    let embedded = embeddings::reembed_missing(&mut conn, &*provider, 96)
+        .map_err(|e| e.to_string())?;
+    let total_chunks: i64 = conn
+        .query_row("SELECT count(*) FROM chunk", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(EmbedProgress {
+        embedded,
+        total_chunks,
+    })
+}
+
+#[tauri::command]
+fn embed_pending(
+    state: State<'_, AppState>,
+) -> std::result::Result<EmbedProgress, String> {
+    let mut conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let (provider_str, _): (String, i64) = conn
+        .query_row(
+            "SELECT provider, dim FROM embedding_meta WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let kind = embeddings::EmbeddingProviderKind::parse(&provider_str);
+    let provider = embeddings::build(kind).map_err(|e| e.to_string())?;
+    let embedded =
+        embeddings::reembed_missing(&mut conn, &*provider, 96).map_err(|e| e.to_string())?;
+    let total_chunks: i64 = conn
+        .query_row("SELECT count(*) FROM chunk", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(EmbedProgress {
+        embedded,
+        total_chunks,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -167,6 +293,24 @@ pub fn run() {
             let watcher_conn = db::open(&db_path)?;
             let ui_conn = db::open(&db_path)?;
             let watcher = watcher::spawn(watcher_conn);
+
+            // Restore watched folders from the previous session. Migration
+            // 0003 invalidated checksums, so the initial ingest inside each
+            // AddRoot command will back-fill section info on every chunk.
+            {
+                let mut stmt =
+                    ui_conn.prepare("SELECT path FROM watched_folder ORDER BY added_at ASC")?;
+                let paths: Vec<String> = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                for p in paths {
+                    let pb = PathBuf::from(&p);
+                    if pb.exists() {
+                        let _ = watcher.add_root(pb);
+                    }
+                }
+            }
 
             app.manage(AppState {
                 conn: Mutex::new(ui_conn),
@@ -185,6 +329,10 @@ pub fn run() {
             get_history,
             get_weak_ngrams,
             list_chapters,
+            get_embedding_status,
+            set_cohere_api_key,
+            set_embedding_provider,
+            embed_pending,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Datlino");

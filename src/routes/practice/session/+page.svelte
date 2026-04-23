@@ -279,7 +279,7 @@
           class:cursor={i === cursor}
           aria-label="mezera"
           data-char-index={i}
-        >·</span>
+        >␣</span>
       {/if}
     {/each}
   </div>

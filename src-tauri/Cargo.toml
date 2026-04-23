@@ -23,13 +23,21 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Storage: system SQLite (3.45+, ships with FTS5). `bundled` + `sqlite-vec`
-# are intentionally deferred to Week 2 when embeddings land.
-rusqlite = { version = "0.31", features = ["functions"] }
+# Storage: bundled SQLite so the `sqlite-vec` virtual table and
+# load_extension work on every platform without a system build. FTS5 is
+# bundled too.
+rusqlite = { version = "0.31", features = ["functions", "bundled", "load_extension"] }
+sqlite-vec = "0.1"
+bytemuck = { version = "1", features = ["derive"] }
 
 # Ingestion + watching
 notify = "6"
 sha2 = "0.10"
+pdf-extract = "0.7"
+
+# Embedding cloud HTTP (BYOK). ureq kept blocking + tiny.
+ureq = { version = "2", features = ["json", "tls"] }
+keyring = "2"
 
 # Segmenter
 regex = "1"

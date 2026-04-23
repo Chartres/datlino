@@ -61,7 +61,7 @@ pub fn search(conn: &Connection, query: &str, k: usize) -> Result<Vec<SearchHit>
 /// Turn a free-form user query into a safe FTS5 MATCH expression. We tokenise
 /// on whitespace, strip FTS5-significant characters (`"`, `*`, `(`, `)`, `:`),
 /// drop empty tokens, and OR them together so a partial match still ranks.
-fn build_match_expression(query: &str) -> String {
+pub fn build_match_expression(query: &str) -> String {
     let tokens: Vec<String> = query
         .split_whitespace()
         .map(sanitise_token)

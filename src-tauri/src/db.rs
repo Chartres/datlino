@@ -18,6 +18,29 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::Path;
+use std::sync::Once;
+
+/// Register `sqlite-vec` as an auto-loaded extension once per process —
+/// every `Connection::open` after this carries the vec0 virtual table.
+///
+/// Must run before the first connection is opened. `open`/`open_in_memory`
+/// call it automatically.
+fn register_sqlite_vec() {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| unsafe {
+        // sqlite3_auto_extension expects the canonical `xEntryPoint`
+        // signature; the sqlite-vec init function matches it modulo the
+        // opaque `sqlite3_api_routines` arg so a transmute is safe.
+        type EntryPoint = unsafe extern "C" fn(
+            *mut rusqlite::ffi::sqlite3,
+            *mut *const std::os::raw::c_char,
+            *const rusqlite::ffi::sqlite3_api_routines,
+        ) -> std::os::raw::c_int;
+        let entry: EntryPoint =
+            std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ());
+        rusqlite::ffi::sqlite3_auto_extension(Some(entry));
+    });
+}
 
 const MIGRATIONS: &[&str] = &[
     // 0001 — base schema, FTS5, sync triggers
@@ -142,14 +165,44 @@ const MIGRATIONS: &[&str] = &[
     "#,
     // 0003 — section (chapter) awareness on chunks for chapter / exam-prep
     // content strategies. `section` is a breadcrumb like "Dějepis > Habsburkové".
+    // Invalidates every document's checksum so the watcher re-ingests on next
+    // startup and back-fills the new section / is_heading columns for chunks
+    // that pre-dated this migration.
     r#"
     ALTER TABLE chunk ADD COLUMN section TEXT NOT NULL DEFAULT '';
     ALTER TABLE chunk ADD COLUMN is_heading INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX IF NOT EXISTS idx_chunk_section ON chunk(document_id, section);
+    UPDATE document SET checksum = '__MIGRATE_0003__';
+    "#,
+    // 0004 — persist the user's watched folders so they survive app restarts.
+    r#"
+    CREATE TABLE IF NOT EXISTS watched_folder (
+        path TEXT PRIMARY KEY,
+        added_at INTEGER NOT NULL
+    );
+    "#,
+    // 0005 — sqlite-vec virtual table. `dim` tracks the active embedding
+    // provider's output dimension; changing providers clears & recreates
+    // the vec table (see embeddings::ensure_vec_table_matches).
+    //
+    // We're running fake/256 by default until the user configures Cohere
+    // (1024). The table is created once per dim at the dim the caller
+    // decides — this migration only guarantees the helper machinery exists.
+    r#"
+    CREATE TABLE IF NOT EXISTS embedding_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        provider TEXT NOT NULL DEFAULT 'none',
+        dim INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    );
+    INSERT INTO embedding_meta(id, provider, dim, created_at)
+        VALUES (1, 'none', 0, strftime('%s','now'))
+        ON CONFLICT(id) DO NOTHING;
     "#,
 ];
 
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
+    register_sqlite_vec();
     let conn = Connection::open(&path)
         .with_context(|| format!("opening sqlite at {}", path.as_ref().display()))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -161,6 +214,7 @@ pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
 
 /// Open an in-memory database (used by tests).
 pub fn open_in_memory() -> Result<Connection> {
+    register_sqlite_vec();
     let conn = Connection::open_in_memory()?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     apply_migrations(&conn)?;

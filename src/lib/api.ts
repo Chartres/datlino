@@ -3,6 +3,9 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import type {
   AttemptRecord,
   ChapterInfo,
+  EmbedProgress,
+  EmbeddingProviderKind,
+  EmbeddingStatus,
   IndexStatus,
   SearchHit,
   SessionHistoryRow,
@@ -38,6 +41,13 @@ export const api = {
   getWeakNgrams: (limit = 20) =>
     invoke<WeakNgram[]>('get_weak_ngrams', { limit }),
   listChapters: () => invoke<ChapterInfo[]>('list_chapters'),
+
+  // embeddings / settings
+  getEmbeddingStatus: () => invoke<EmbeddingStatus>('get_embedding_status'),
+  setCohereApiKey: (key: string) => invoke<void>('set_cohere_api_key', { key }),
+  setEmbeddingProvider: (kind: EmbeddingProviderKind) =>
+    invoke<EmbedProgress>('set_embedding_provider', { kind }),
+  embedPending: () => invoke<EmbedProgress>('embed_pending'),
 
   // native dialog
   pickFolder: async (): Promise<string | null> => {

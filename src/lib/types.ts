@@ -106,6 +106,21 @@ export type IndexStatus = {
   watched_roots: string[];
 };
 
+export type EmbeddingProviderKind = 'none' | 'fake' | 'cohere' | 'local';
+
+export type EmbeddingStatus = {
+  provider: EmbeddingProviderKind | string;
+  dim: number;
+  embedded_chunks: number;
+  total_chunks: number;
+  cohere_key_present: boolean;
+};
+
+export type EmbedProgress = {
+  embedded: number;
+  total_chunks: number;
+};
+
 export type SearchHit = {
   chunk_id: number;
   document_id: number;

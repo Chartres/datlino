@@ -18,6 +18,7 @@ use crate::segmenter;
 pub enum DocKind {
     Markdown,
     Text,
+    Pdf,
 }
 
 impl DocKind {
@@ -25,13 +26,20 @@ impl DocKind {
         match self {
             DocKind::Markdown => "md",
             DocKind::Text => "txt",
+            DocKind::Pdf => "pdf",
         }
     }
 
     pub fn from_path(path: &Path) -> Option<DocKind> {
-        match path.extension().and_then(|s| s.to_str()) {
+        match path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
             Some("md") | Some("markdown") => Some(DocKind::Markdown),
             Some("txt") => Some(DocKind::Text),
+            Some("pdf") => Some(DocKind::Pdf),
             _ => None,
         }
     }
@@ -53,7 +61,7 @@ pub fn ingest_file(conn: &mut Connection, path: &Path) -> Result<bool> {
     };
     let canonical = fs::canonicalize(path)
         .with_context(|| format!("canonicalising {}", path.display()))?;
-    let raw = fs::read_to_string(&canonical)
+    let raw = read_document(&canonical, kind)
         .with_context(|| format!("reading {}", canonical.display()))?;
     let checksum = sha256_hex(raw.as_bytes());
     let canonical_str = canonical.to_string_lossy().to_string();
@@ -200,6 +208,75 @@ pub fn document_paths(conn: &Connection) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// Read a document's plain text. Markdown/.txt are read as UTF-8 directly;
+/// PDFs go through `pdf-extract` which returns the text layer only.
+///
+/// Image-only PDFs (scans, handwritten GoodNotes pages) produce empty or
+/// near-empty output here — OCR lives in a later increment. We still
+/// ingest them so the file appears in the library; the chunk count will
+/// just be zero until OCR lands.
+fn read_document(path: &Path, kind: DocKind) -> Result<String> {
+    match kind {
+        DocKind::Markdown | DocKind::Text => {
+            Ok(fs::read_to_string(path)
+                .with_context(|| format!("reading text {}", path.display()))?)
+        }
+        DocKind::Pdf => {
+            let bytes = fs::read(path)
+                .with_context(|| format!("reading pdf {}", path.display()))?;
+            let extracted = pdf_extract::extract_text_from_mem(&bytes)
+                .map_err(|e| anyhow::anyhow!("pdf-extract: {e}"))?;
+            Ok(clean_pdf_text(&extracted))
+        }
+    }
+}
+
+/// PDFs often extract with per-line hard breaks inside paragraphs, stray
+/// form feeds and awkward word joins. This does the minimum cleanup so
+/// the segmenter gets reasonable prose to work on:
+///   * Replace form feeds and vertical tabs with blank lines (paragraphs).
+///   * Collapse a line break surrounded by lowercase / alphanumeric chars
+///     into a single space (it was a soft wrap, not a real break).
+///   * Leave blank-line paragraph separators alone.
+fn clean_pdf_text(raw: &str) -> String {
+    let mut s = raw.replace(['\x0C', '\x0B'], "\n\n");
+    // Strip trailing whitespace from each line.
+    s = s.lines().map(str::trim_end).collect::<Vec<_>>().join("\n");
+    // Join soft-wrapped lines: `word\nword` → `word word`, but keep
+    // paragraph breaks (`\n\n`) intact.
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\n' {
+            // Is this a paragraph break? look ahead for another \n.
+            let next = chars.get(i + 1).copied();
+            if next == Some('\n') {
+                out.push('\n');
+                out.push('\n');
+                i += 2;
+                while i < chars.len() && chars[i] == '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            // Soft wrap — replace with space unless previous line ended
+            // with a hyphen (then drop the hyphen and glue).
+            if out.ends_with('-') {
+                out.pop();
+            } else {
+                out.push(' ');
+            }
+            i += 1;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
@@ -284,5 +361,20 @@ mod tests {
             .query_row("SELECT count(*) FROM document", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn clean_pdf_text_joins_soft_wraps_but_keeps_paragraphs() {
+        let raw = "Velka hospodarska krize\nzacala v roce 1929.\n\nBanky\nkrachovaly po cele zemi.";
+        let got = clean_pdf_text(raw);
+        assert!(got.contains("Velka hospodarska krize zacala v roce 1929."));
+        assert!(got.contains("\n\n"), "paragraph break preserved: {got:?}");
+        assert!(got.contains("Banky krachovaly po cele zemi."));
+    }
+
+    #[test]
+    fn clean_pdf_text_dehyphenates_line_breaks() {
+        let raw = "hospo-\ndarska krize";
+        assert_eq!(clean_pdf_text(raw), "hospodarska krize");
     }
 }
