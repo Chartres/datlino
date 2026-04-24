@@ -305,6 +305,21 @@ fn list_documents(
     session::list_documents(&conn).map_err(|e| e.to_string())
 }
 
+/// Ship the human-curated CHANGELOG.md to the frontend. Baked into the
+/// binary at compile time so the /about page works offline.
+#[tauri::command]
+fn get_changelog() -> std::result::Result<String, String> {
+    // CHANGELOG.md lives in the repo root; relative to this file it's two
+    // levels up. `include_str!` embeds it at compile time so the binary
+    // ships the exact version shipped in the commit.
+    Ok(include_str!("../../CHANGELOG.md").to_string())
+}
+
+#[tauri::command]
+fn get_version() -> std::result::Result<String, String> {
+    Ok(env!("CARGO_PKG_VERSION").to_string())
+}
+
 #[tauri::command]
 fn ingest_single_file(
     path: String,
@@ -404,6 +419,8 @@ pub fn run() {
             list_intro_lessons,
             list_documents,
             ingest_single_file,
+            get_changelog,
+            get_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Datlino");

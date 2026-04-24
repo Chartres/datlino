@@ -1,5 +1,5 @@
 
-## Session 2026-04-24T00:20:42.421Z
+## Session 2026-04-24T00:30:06.020Z
 
 > Moje poznámky jsou PDF z GoodNotes. Obrázky rukopisu.
 
@@ -7,7 +7,7 @@
 - **[install-hint]** _(delight)_ Vidím brew příkaz pro macOS. Tereza to skopíruje a spustí. OK.
 - **[after-install-feedback]** _(confusion)_ Otevřená otázka: po `brew install tesseract poppler` aplikace sama nic neudělá — musím zavřít a otevřít? Přežil by tu tlačítko "Zkontrolovat znovu".
 
-## Session 2026-04-24T00:20:42.699Z
+## Session 2026-04-24T00:30:06.380Z
 
 > Moje poznámky jsou PDF z GoodNotes. Obrázky rukopisu.
 

@@ -64,6 +64,10 @@ export const api = {
   // intro lessons
   listIntroLessons: () => invoke<LessonListItem[]>('list_intro_lessons'),
 
+  // about + changelog
+  getChangelog: () => invoke<string>('get_changelog'),
+  getVersion: () => invoke<string>('get_version'),
+
   // documents / file picker
   listDocuments: () => invoke<DocumentInfo[]>('list_documents'),
   ingestSingleFile: (path: string) => invoke<boolean>('ingest_single_file', { path }),

@@ -13,7 +13,8 @@
     { href: '/learn', label: 'Učím se psát' },
     { href: '/study', label: 'Učím se obsah' },
     { href: '/progress', label: 'Pokrok' },
-    { href: '/settings', label: 'Nastavení' }
+    { href: '/settings', label: 'Nastavení' },
+    { href: '/about', label: 'O aplikaci' }
   ];
 
   function isActive(href: string, pathname: string): boolean {

@@ -305,6 +305,14 @@ export async function installMockTauri(page: Page, corpus: MockCorpus) {
         case 'detect_anthropic_env_key':
           return null;
 
+        case 'get_changelog':
+          // A short excerpt is enough for the spec to assert structure.
+          // In production this comes from include_str! on the real file.
+          return `# Datlino — Changelog\n\n## Unreleased\n\n## 2026-04-24\n\n**IA reorg: two doors instead of six modes.**\n\n- Home screen is now a dashboard.\n- /learn + /study as the two top-level paths.\n\n## 2026-04-23\n\n**Dead-key diacritics fixed for all layouts.**\n\n- \`ř\`, \`č\`, \`š\`, \`ž\`, \`ě\`, \`ů\` register as ONE keystroke.\n`;
+
+        case 'get_version':
+          return '0.1.0-mock';
+
         // Dialog plugin — tauri-apps/plugin-dialog routes its open() call
         // through __TAURI_INTERNALS__.invoke('plugin:dialog|open', …).
         case 'plugin:dialog|open': {

@@ -1,0 +1,115 @@
+# Datlino — Changelog
+
+Human-curated user-facing changes. Technical refactors live in `git log`;
+this file captures what a student or parent would notice.
+
+Dates use the commit day. The `[ref]` handles point at backlog items in
+`research/plan/BACKLOG.md` for full context.
+
+## Unreleased
+
+_(in progress — see `research/plan/BACKLOG.md` for the full plan)_
+
+## 2026-04-24
+
+**IA reorg: two doors instead of six modes.** `[IA-001 IA-002 IA-003 IA-004 IA-005 IA-006]`
+
+- Home screen is now a **"Co dnes?"** dashboard with a contextual
+  greeting and two big doors: **Učím se psát** (keystrokes path) and
+  **Učím se obsah** (content path).
+- **Učím se psát** combines the 16-lesson intro curriculum, a
+  **Tvá slabá místa** drill that targets your own weak key
+  combinations, and a **Diakritika** drill for č/š/ř/ě/ů/ý/á/í.
+  One-click "Pokračovat" on the next unpassed lesson.
+- **Učím se obsah** holds the three content strategies (Napříč
+  materiály / Celá kapitola / Příprava na zkoušku), your document
+  list with a filter, and the empty-state invitation that mentions
+  Markdown, PDF, and GoodNotes exports.
+- The α-mix slider and LLM Remix toggle moved behind a **Pokročilé**
+  expander so beginners never meet them by accident.
+
+**Brand artwork.** `[BR-001]`
+
+- The **Scholarly Peck** woodpecker logo lands in the header next to
+  the wordmark.
+- The **Integrated Icon** becomes the app icon + favicon. Deep-red
+  field with an open book and a peeking woodpecker.
+
+## 2026-04-23
+
+**Dead-key diacritics fixed for all layouts.** `[KB-002]`
+
+- `ř`, `č`, `š`, `ž`, `ě`, `ů` now register as ONE correct keystroke
+  regardless of the keyboard layout (CZ-QWERTZ direct keys, CZ-QWERTY
+  dead-keys, macOS Czech ABC, Linux IBus). No more phantom wrong
+  characters.
+
+**16-lesson intro curriculum.** `[KB-001 PE-001]`
+
+- From home row (ASDF / JKL;) through the whole keyboard to háčky,
+  čárky, kroužek, shift, numbers, and punctuation. Sixteen lessons,
+  each with a speed/accuracy target that unlocks the next lesson.
+- On-screen keyboard shows finger-zone colors, home-row dots on F/J
+  A/;, and glows on the next key to press. Toggle-hide when you're
+  ready to fly solo.
+
+**Learning-zone weak-ngram targeting.** `[PE-001]`
+
+- Remix mode (when enabled) rewrites sentences to seed the keys at
+  the *edge of your fluency* — not the broken ones (those stay in
+  the isolated drill). Zone-of-proximal-development signal: 5-30 %
+  error rate, median-to-p90 latency.
+
+## 2026-04-22
+
+**Content strategies: three ways to study your materials.** `[IA-003 IA-004]`
+
+- **Napříč materiály** — sentences from anywhere in your library
+  that mention the topic. Connect ideas across sources.
+- **Celá kapitola** — every sentence of one Markdown section, in
+  order. End-to-end reading.
+- **Příprava na zkoušku** — describe the exam topic; Datlino
+  surfaces the most relevant chapters.
+
+**Document picker.** `[ING-003 ING-004 ING-005]`
+
+- Every ingested file is a card in the library. Click "Trénovat celý"
+  and type the whole document in source order — no BM25 detour.
+- Filename-aware search: searching "chemie" now finds the chemistry
+  file even if the word never appears in the body.
+- "Přidat jeden soubor" alongside "Přidat složku" for quick imports.
+
+## 2026-04-21
+
+**Week 2 foundation: embeddings + PDF + OCR + Rephrase.** `[AI-003 ING-002 ING-006]`
+
+- **Local Candle embeddings** (multilingual-e5-small, 384-dim) ship
+  on by default. No key or account — embeddings happen on your
+  machine.
+- **Cohere embed-multilingual-v3** as a cloud alternative. BYOK into
+  the OS keychain.
+- **PDF ingestion** via text-layer extraction, with dehyphenation
+  and paragraph preservation.
+- **OCR dispatch** (`tesseract` + `pdftoppm`) for image-only PDFs
+  and GoodNotes exports. Detected heuristically when the text layer
+  is too thin.
+- **LLM Remix** (opt-in, per-session): Claude Haiku rewrites each
+  sentence to inject your weak-key combinations while preserving
+  facts and proper nouns. Cosine similarity gate rejects drift.
+- **Cosine-similarity hybrid scorer**: when a provider is configured
+  and chunks are embedded, `α · relevance + (1-α) · pedagogy` uses
+  real embeddings for the relevance term.
+
+## 2026-04-20
+
+**Week 1: library, keyboard, typing engine.** `[KB-001 KB-002 ING-001]`
+
+- Folder ingest walks subdirectories; `.md` / `.markdown` / `.txt`
+  covered. SHA-256 checksums prevent re-work.
+- SQLite schema + FTS5 for keyword search.
+- Czech/Slovak-aware sentence segmentation (handles `např.`, `tzv.`,
+  Unicode bullets, Roman numerals on kings like `Karel IV.`).
+- Typing engine with per-character correctness, live WPM/accuracy,
+  keystroke log, red woodpecker caret.
+- Gamification: XP, levels, streaks, 10 badges.
+- Progress page: WPM sparkline, weak-key bars, session history.
