@@ -6,6 +6,7 @@
 pub mod claude_auth;
 pub mod db;
 pub mod embeddings;
+pub mod fsrs;
 pub mod ingest;
 pub mod lessons;
 pub mod ocr;
@@ -311,6 +312,47 @@ fn list_documents(
     session::list_documents(&conn).map_err(|e| e.to_string())
 }
 
+// ---------- calibration + metacognition ----------
+
+#[tauri::command]
+fn record_calibration_prediction(
+    session_id: i64,
+    predicted_accuracy_pct: f64,
+    state: State<'_, AppState>,
+) -> std::result::Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    progress::record_calibration_prediction(&conn, session_id, predicted_accuracy_pct)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn record_calibration_reflection(
+    session_id: i64,
+    actual_accuracy_pct: f64,
+    difficulty: Option<i32>,
+    note: Option<String>,
+    state: State<'_, AppState>,
+) -> std::result::Result<(), String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    progress::record_calibration_reflection(
+        &conn,
+        session_id,
+        actual_accuracy_pct,
+        difficulty,
+        note,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn calibration_history(
+    limit: usize,
+    state: State<'_, AppState>,
+) -> std::result::Result<Vec<progress::CalibrationPoint>, String> {
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    progress::calibration_history(&conn, limit.clamp(1, 200)).map_err(|e| e.to_string())
+}
+
 /// Ship the human-curated CHANGELOG.md to the frontend. Baked into the
 /// binary at compile time so the /about page works offline.
 #[tauri::command]
@@ -426,6 +468,9 @@ pub fn run() {
             list_intro_lessons,
             list_documents,
             ingest_single_file,
+            record_calibration_prediction,
+            record_calibration_reflection,
+            calibration_history,
             get_changelog,
             get_version,
         ])

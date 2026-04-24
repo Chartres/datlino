@@ -47,11 +47,11 @@
 | KB-004 | Animated hand silhouette showing finger stretch | backlog | — |
 | KB-005 | Shift-key introduction in early lesson (trigger .shift-glow) | backlog | — |
 | PE-001 | Weak-ngram learning-zone signal (not just the broken ones) | shipped | 000c1ad |
-| PE-002 | FSRS scheduler on content chunks | planned | — |
-| PE-003 | Cloze drills (delete a word, type to fill) | planned | — |
+| PE-002 | FSRS scheduler on content chunks | shipped | b2e4332 |
+| PE-003 | Cloze drills (delete a word, type to fill) | shipped | b2e4332 |
 | PE-004 | Dictation mode (browser TTS reads; student types) | planned | — |
-| PE-005 | Pre-session calibration ("kolik % napíšeš správně?") | planned | — |
-| PE-006 | Post-session metacognitive summary ("co se ti lepší, co horší, co dál") | planned | — |
+| PE-005 | Pre-session calibration ("kolik % napíšeš správně?") | shipped | b2e4332 |
+| PE-006 | Post-session metacognitive summary ("co se ti lepší, co horší, co dál") | shipped | b2e4332 |
 | PE-007 | Desirable-difficulty toggles (hide keyboard, reduce lookahead, second-pass memory) | planned | — |
 | PE-008 | Interleaving nudge when student blocks on one subject | backlog | — |
 | PE-009 | Pomodoro break suggestion mid-session | backlog | — |

@@ -7,6 +7,9 @@
   import type { AttemptRecord, Keystroke } from '$lib/types';
 
   let showKeyboard = $state(true);
+  let showCalibration = $state(true);
+  let predictedAccuracy = $state(85);
+  let calibrationSaved = $state(false);
 
   const plan = $derived(currentSession.plan);
 
@@ -68,6 +71,33 @@
   );
   const targetChars = $derived(Array.from(target)); // codepoints
   const totalSentences = $derived(plan?.sentences.length ?? 0);
+
+  // Cloze mask — for the current sentence, which char indices should be
+  // rendered as blanks (underscores) in the visible surface while still
+  // being typed as the real character. Derived per-sentence from the
+  // sentence's `cloze_span` [byte_offset, byte_length] in the source.
+  const clozeHidden = $derived.by<Set<number>>(() => {
+    const hidden = new Set<number>();
+    const s = plan?.sentences[sentenceIndex];
+    if (!s?.cloze_span) return hidden;
+    const [byteOff, byteLen] = s.cloze_span;
+    // Walk the normalised target + compute byte→char index mapping.
+    const raw = s.text;
+    let byteCursor = 0;
+    let charIdx = 0;
+    for (const ch of Array.from(raw)) {
+      const chBytes = new TextEncoder().encode(ch).length;
+      if (byteCursor >= byteOff && byteCursor < byteOff + byteLen) {
+        // Map back to the normalised targetChars index. Since the
+        // normaliser never changes alphabetic chars (only punctuation),
+        // the index lines up 1:1 for cloze words.
+        hidden.add(charIdx);
+      }
+      byteCursor += chBytes;
+      charIdx += 1;
+    }
+    return hidden;
+  });
 
   // Group chars into words + space markers so wrap happens at spaces and
   // long passages read like prose. Each `word` group is rendered as an
@@ -329,6 +359,18 @@
     }
   }
 
+  async function confirmCalibration() {
+    if (!plan) return;
+    try {
+      await api.recordCalibrationPrediction(plan.session_id, predictedAccuracy);
+      calibrationSaved = true;
+    } catch (e) {
+      // Non-blocking — calibration is advisory; if it fails we still
+      // let the student practice.
+    }
+    showCalibration = false;
+  }
+
   async function finishSession() {
     if (submitting || !plan) return;
     submitting = true;
@@ -362,6 +404,37 @@
 </script>
 
 <svelte:window onkeydown={handleKey} oncompositionend={handleCompositionEnd} />
+
+{#if plan && showCalibration && !calibrationSaved}
+  <div class="calibration-modal" role="dialog" aria-labelledby="cal-title">
+    <div class="cal-card">
+      <h3 id="cal-title">Než začneš — krátká kalibrace</h3>
+      <p class="muted">
+        Kolik procent znaků napíšeš správně v tomhle sezení? Je to
+        malý test tvého vlastního odhadu — časem zjistíš, jestli se
+        přeceňuješ nebo podceňuješ.
+      </p>
+      <div class="cal-slider">
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          bind:value={predictedAccuracy}
+        />
+        <div class="cal-value">{predictedAccuracy}%</div>
+      </div>
+      <div class="cal-actions">
+        <button type="button" onclick={() => (showCalibration = false)}>
+          Přeskočit
+        </button>
+        <button type="button" class="primary" onclick={confirmCalibration}>
+          Začít →
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if plan}
   <div class="hud">
@@ -405,8 +478,9 @@
               class:correct={typed[i] === targetChars[i]}
               class:wrong={typed[i] !== null && typed[i] !== targetChars[i]}
               class:cursor={i === cursor}
+              class:cloze={clozeHidden.has(i) && typed[i] === null}
               data-char-index={i}
-            >{targetChars[i]}</span>
+            >{clozeHidden.has(i) && typed[i] === null ? '_' : targetChars[i]}</span>
           {/each}
         </span>
       {:else}
@@ -593,5 +667,77 @@
   }
   .keyboard-wrap {
     margin-top: 1rem;
+  }
+
+  .char.cloze {
+    color: transparent;
+    background: repeating-linear-gradient(
+      90deg,
+      rgba(28, 25, 23, 0.15) 0,
+      rgba(28, 25, 23, 0.15) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    border-bottom: 2px solid rgba(179, 39, 31, 0.4);
+    border-radius: 0;
+  }
+  .char.cloze.cursor {
+    box-shadow: inset -2px 0 0 0 #b3271f;
+  }
+
+  .calibration-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(28, 25, 23, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .cal-card {
+    background: #fffaf2;
+    border: 1px solid rgba(28, 25, 23, 0.15);
+    border-radius: 10px;
+    padding: 1.5rem 1.75rem;
+    max-width: 36rem;
+    box-shadow: 0 12px 40px rgba(28, 25, 23, 0.18);
+  }
+  .cal-card h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1.15rem;
+    color: #1c1917;
+  }
+  .cal-slider {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+  .cal-slider input[type='range'] { flex: 1; }
+  .cal-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #b3271f;
+    min-width: 4rem;
+    text-align: right;
+  }
+  .cal-actions {
+    display: flex;
+    gap: 0.6rem;
+    justify-content: flex-end;
+  }
+  .cal-actions button {
+    padding: 0.5rem 1rem;
+    border: 1px solid rgba(28, 25, 23, 0.2);
+    background: transparent;
+    border-radius: 5px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .cal-actions button.primary {
+    border-color: #b3271f;
+    background: #b3271f;
+    color: #fffaf2;
+    font-weight: 600;
   }
 </style>

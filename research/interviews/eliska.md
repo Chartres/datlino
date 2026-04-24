@@ -1,17 +1,17 @@
 
-## Session 2026-04-24T01:25:41.285Z
+## Session 2026-04-24T06:39:00.386Z
 
 > Mamka mi to nainstalovala. Doufám že mi to řekne co mám dělat.
 
 - **[first-screen]** _(info)_ Window title reads "Datlino".
 
-## Session 2026-04-24T01:25:41.477Z
+## Session 2026-04-24T06:39:00.585Z
 
 > Mamka mi to nainstalovala. Doufám že mi to řekne co mám dělat.
 
 - **[nav-scan]** _(delight)_ Top nav: ["Domů","Učím se psát","Učím se obsah","Pokrok","Nastavení","O aplikaci"]. New IA — "Učím se psát" and "Učím se obsah" are obvious Czech phrases; she picks the first.
 - **[home-doors]** _(delight)_ Home page ukazuje dvě velké dveře: ["Učím se psát","Učím se obsah"]. Žádný shluk šesti dlaždic. Ulehčení.
-- **[learn-tiles]** _(delight)_ Na /learn vidím tři dlaždice: ["Úvodní lekce","Tvá slabá místa","Diakritika"]. "Úvodní lekce" je zvýrazněná s primary border — jasná první volba.
+- **[learn-tiles]** _(delight)_ Na /learn vidím tři dlaždice: ["Úvodní lekce","Tvá slabá místa","Diakritika","Doplň chybějící slovo"]. "Úvodní lekce" je zvýrazněná s primary border — jasná první volba.
 - **[one-click-cta]** _(delight)_ Velké tlačítko nahoře říká: "Začít první lekci
       →". Jedno kliknutí = hned píšu.
 - **[settings-default-open]** _(delight)_ Výchozí otevřené sekce: ["Profil"]. Měla by být jen "Profil".

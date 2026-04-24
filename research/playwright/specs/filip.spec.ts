@@ -88,6 +88,9 @@ test.describe('Filip, 13 — keyboard-first beginner', () => {
     await page.goto('/learn');
     await page.click('.hero .cta');
     await page.waitForURL('**/practice/session');
+    // New: calibration modal appears before the surface is interactive.
+    const cal = page.locator('.calibration-modal');
+    if (await cal.count()) await cal.locator('button.primary').click();
     await page.waitForSelector('.keyboard');
 
     await page.click('button:has-text("Skrýt klávesnici")');

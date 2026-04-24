@@ -20,6 +20,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::db::now_unix;
+use crate::fsrs;
 use crate::lessons;
 use crate::pedagogy::{self, Keystroke};
 
@@ -111,6 +112,14 @@ pub fn finalize_session(
         )?;
 
         pedagogy::update_stats(conn, user_id, &a.keystrokes)?;
+
+        // FSRS scheduling — only chunks backed by real source material.
+        // Generated drills (lessons, diacritic drills) don't need spaced
+        // repetition; they live in their own unlock curriculum.
+        if let Some(chunk_id) = a.chunk_id {
+            let grade = fsrs::grade_from_attempt(acc * 100.0, wpm, 90.0, 40.0);
+            update_fsrs(conn, user_id, chunk_id, grade)?;
+        }
     }
 
     // --- 2. Session totals ---
@@ -451,6 +460,53 @@ pub fn list_intro_lessons(
     Ok(out)
 }
 
+fn update_fsrs(
+    conn: &rusqlite::Connection,
+    user_id: i64,
+    chunk_id: i64,
+    grade: fsrs::Grade,
+) -> Result<()> {
+    let now = now_unix();
+    let existing: Option<fsrs::State> = conn
+        .query_row(
+            "SELECT stability, difficulty, due_at, last_review, reps
+             FROM chunk_fsrs WHERE user_id = ?1 AND chunk_id = ?2",
+            rusqlite::params![user_id, chunk_id],
+            |r| {
+                Ok(fsrs::State {
+                    stability: r.get(0)?,
+                    difficulty: r.get(1)?,
+                    due_at: r.get(2)?,
+                    last_review: r.get(3)?,
+                    reps: r.get::<_, i64>(4)? as u32,
+                })
+            },
+        )
+        .ok();
+    let prev = existing.unwrap_or_default();
+    let next = fsrs::update(&prev, grade, now);
+    conn.execute(
+        "INSERT INTO chunk_fsrs(user_id, chunk_id, stability, difficulty, due_at, last_review, reps)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(user_id, chunk_id) DO UPDATE SET
+             stability = excluded.stability,
+             difficulty = excluded.difficulty,
+             due_at = excluded.due_at,
+             last_review = excluded.last_review,
+             reps = excluded.reps",
+        rusqlite::params![
+            user_id,
+            chunk_id,
+            next.stability,
+            next.difficulty,
+            next.due_at,
+            next.last_review,
+            next.reps as i64,
+        ],
+    )?;
+    Ok(())
+}
+
 fn award_badges(
     conn: &mut Connection,
     user_id: i64,
@@ -527,6 +583,80 @@ pub struct SessionHistoryRow {
     pub alpha: f64,
     pub xp_earned: i64,
     pub summary: Option<serde_json::Value>,
+}
+
+/// Record the student's pre-session accuracy prediction. One row per
+/// session; calling twice overwrites.
+pub fn record_calibration_prediction(
+    conn: &rusqlite::Connection,
+    session_id: i64,
+    predicted_accuracy_pct: f64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO calibration(session_id, predicted_accuracy_pct, created_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(session_id) DO UPDATE SET
+             predicted_accuracy_pct = excluded.predicted_accuracy_pct",
+        rusqlite::params![session_id, predicted_accuracy_pct, now_unix()],
+    )?;
+    Ok(())
+}
+
+/// After the session, the student rates difficulty 1–5 and optionally
+/// drops a free-text note. We also stamp the actual accuracy so the
+/// calibration plot can compare prediction vs reality.
+pub fn record_calibration_reflection(
+    conn: &rusqlite::Connection,
+    session_id: i64,
+    actual_accuracy_pct: f64,
+    difficulty: Option<i32>,
+    note: Option<String>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE calibration SET
+            actual_accuracy_pct = ?1,
+            reflection_difficulty = ?2,
+            reflection_note = ?3
+         WHERE session_id = ?4",
+        rusqlite::params![actual_accuracy_pct, difficulty, note, session_id],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct CalibrationPoint {
+    pub session_id: i64,
+    pub predicted: f64,
+    pub actual: Option<f64>,
+    pub difficulty: Option<i32>,
+    pub created_at: i64,
+}
+
+pub fn calibration_history(
+    conn: &rusqlite::Connection,
+    limit: usize,
+) -> Result<Vec<CalibrationPoint>> {
+    let mut stmt = conn.prepare(
+        "SELECT session_id, predicted_accuracy_pct, actual_accuracy_pct,
+                reflection_difficulty, created_at
+         FROM calibration
+         ORDER BY created_at DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![limit as i64], |r| {
+        Ok(CalibrationPoint {
+            session_id: r.get(0)?,
+            predicted: r.get(1)?,
+            actual: r.get(2)?,
+            difficulty: r.get(3)?,
+            created_at: r.get(4)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 pub fn session_history(

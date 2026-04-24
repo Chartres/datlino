@@ -71,6 +71,35 @@ export const api = {
   getChangelog: () => invoke<string>('get_changelog'),
   getVersion: () => invoke<string>('get_version'),
 
+  // calibration + metacognition
+  recordCalibrationPrediction: (sessionId: number, predictedAccuracyPct: number) =>
+    invoke<void>('record_calibration_prediction', {
+      sessionId,
+      predictedAccuracyPct
+    }),
+  recordCalibrationReflection: (
+    sessionId: number,
+    actualAccuracyPct: number,
+    difficulty: number | null,
+    note: string | null
+  ) =>
+    invoke<void>('record_calibration_reflection', {
+      sessionId,
+      actualAccuracyPct,
+      difficulty,
+      note
+    }),
+  calibrationHistory: (limit = 30) =>
+    invoke<
+      {
+        session_id: number;
+        predicted: number;
+        actual: number | null;
+        difficulty: number | null;
+        created_at: number;
+      }[]
+    >('calibration_history', { limit }),
+
   // documents / file picker
   listDocuments: () => invoke<DocumentInfo[]>('list_documents'),
   ingestSingleFile: (path: string) => invoke<boolean>('ingest_single_file', { path }),

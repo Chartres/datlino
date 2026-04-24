@@ -8,6 +8,52 @@ Dates use the commit day. The `[ref]` handles point at backlog items in
 
 ## Unreleased
 
+**Pedagogy depth: FSRS + Cloze + Calibration + Metacognition.** `[PE-002 PE-003 PE-005 PE-006]`
+
+- **FSRS** (Free Spaced Repetition Scheduler) now runs on your content
+  chunks. After every session, each typed sentence is graded 1–4 based
+  on accuracy + WPM vs target, and the FSRS-4.5 update rule computes
+  a new stability, difficulty, and due date for that chunk. Napříč
+  materiály now surfaces *overdue* chunks first, novel chunks
+  afterwards — so repeat-review material lands when it's genuinely
+  time to review, not when random chance picks it.
+- **Cloze drill** — new tile on **Učím se psát**. One high-information
+  word per sentence is blanked in the display (you see `________`);
+  you type the full sentence from context. Retrieval practice +
+  keystrokes in one move. Uses the same content-across scoring so
+  it respects FSRS due dates too.
+- **Pre-session calibration** — before any session starts, a small
+  modal asks "kolik % znaků napíšeš správně?" with a slider. Your
+  prediction is stored; the post-session reflection pins it next to
+  the actual accuracy so over time you see if you over- or
+  under-estimate.
+- **Post-session metacognition** — the summary page now asks
+  difficulty 1–5 and a free-text note ("co ti šlo, co procvičíš
+  příště?"). Optional. Stored per-session so the Pokrok page can
+  eventually plot a difficulty-vs-WPM curve.
+
+**Seven bug-fixes from hands-on testing.** `[UX-002 UX-009 KB-002 BR-001]`
+
+- Settings disclosure arrows are now proper ▾ chevrons at the right
+  edge that rotate 180° on open, not tiny ▸ in a confusing column.
+- Remix toggle on `/study` now unlocks when a Claude subscription OR
+  a BYOK key is present — previously the subscription wasn't
+  consulted.
+- Candle provider switch uses an explicit `ApiBuilder` so the
+  "RelativeUrlWithoutBase" hf-hub error under Tauri-launched
+  processes is avoided.
+- Logo redrawn closer to the Scholarly Peck concept — classical
+  silhouette, flowing red crest, chisel beak, keyboard-grid wing.
+- Dead-key filter extended for Slovak layouts: ˝ ¸ ˙ ¯ plus full
+  Unicode combining-mark ranges plus AltGraph + `Process` +
+  `Compose` IME sentinels. `ů` and `ř` on SK layout now register
+  as one correct keystroke.
+- Subscript / superscript / dash / smart-quote normalisation on the
+  typing display — so H₂O becomes typeable as H2O, em-dashes as
+  regular dashes, and smart quotes as straight. Raw text stays
+  intact in the DB.
+- Rephrase model upgraded: Haiku → Sonnet 4.6.
+
 **Settings regroup + Sign in with Claude.** `[IA-007 AI-001 ING-008]`
 
 - **Settings** is now four collapsible sections — **Profil** (your

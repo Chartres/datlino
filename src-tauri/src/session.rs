@@ -41,6 +41,12 @@ pub enum PracticeMode {
     /// Structured progression for absolute beginners — home row → full
     /// keyboard → diacritics → real sentences.
     IntroLesson,
+    /// Retrieval-practice drill: we blank out a content word in each
+    /// sentence; the student types the FULL sentence (including the
+    /// hidden word) from context. The display hides the word; the
+    /// keystroke target still has it. Biggest leverage in the
+    /// "learning how to learn" literature after spaced repetition.
+    Cloze,
 }
 
 impl PracticeMode {
@@ -52,6 +58,7 @@ impl PracticeMode {
             PracticeMode::WeakKeys => "weak_keys",
             PracticeMode::Hybrid => "hybrid",
             PracticeMode::IntroLesson => "intro_lesson",
+            PracticeMode::Cloze => "cloze",
         }
     }
 }
@@ -113,6 +120,10 @@ pub struct SessionRequest {
     /// that document in source order.
     #[serde(default)]
     pub document_id: Option<i64>,
+    /// Per-session cloze mask position (for Cloze mode). Rendered as
+    /// hidden on the typing surface; kept in `text` so keystrokes match.
+    #[serde(default)]
+    pub cloze_index: Option<usize>,
 }
 
 impl Default for SessionRequest {
@@ -130,6 +141,7 @@ impl Default for SessionRequest {
             language: None,
             lesson_id: None,
             document_id: None,
+            cloze_index: None,
         }
     }
 }
@@ -154,6 +166,11 @@ pub struct SessionSentence {
     /// Cosine(source, rephrase) against the active embedding provider.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub similarity: Option<f32>,
+    /// For Cloze mode: UTF-8 byte offset + byte length of the hidden
+    /// word inside `text`. The frontend masks these characters on
+    /// display but the keystroke target still includes them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloze_span: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -190,6 +207,7 @@ pub fn create_session(
         PracticeMode::WeakKeys => pick_weak_keys(conn, user_id, req)?,
         PracticeMode::Hybrid => pick_hybrid(conn, user_id, req)?,
         PracticeMode::IntroLesson => pick_intro_lesson(conn, user_id, req)?,
+        PracticeMode::Cloze => pick_cloze(conn, user_id, req)?,
     };
 
     // Optional rephrase pass — only for Content mode with backing chunks.
@@ -266,6 +284,7 @@ fn pick_content(
             source_text: None,
             rephrased_id: None,
             similarity: None,
+            cloze_span: None,
         });
     }
     Ok(out)
@@ -279,12 +298,41 @@ fn pick_across(
 ) -> Result<Vec<SessionSentence>> {
     use std::collections::{HashMap, HashSet};
 
-    let hits = search::search(conn, query, 60)?;
+    // FSRS-backed due queue: any chunks that match the query AND are
+    // overdue for review jump to the front. Without embeddings we can't
+    // semantic-match; with BM25 we intersect the keyword hits with the
+    // FSRS overdue set. Novel hits come after.
+    let hits = search::search(conn, query, 120)?;
     let hits: Vec<_> = hits
         .into_iter()
         .filter(|h| source_allowed(&h.source_path, pinned))
         .filter(|h| !is_low_content(&h.text))
         .collect();
+
+    let now = now_unix();
+    let due_ids: HashSet<i64> = {
+        let mut stmt = conn.prepare(
+            "SELECT chunk_id FROM chunk_fsrs WHERE user_id = 1 AND due_at > 0 AND due_at <= ?1",
+        )?;
+        let mapped = stmt
+            .query_map(params![now], |r| r.get::<_, i64>(0))?
+            .filter_map(|r| r.ok())
+            .collect::<HashSet<i64>>();
+        mapped
+    };
+
+    // Promote due hits to the top while preserving BM25 order within
+    // each band (due-first, then novel).
+    let mut due_hits = Vec::new();
+    let mut novel_hits = Vec::new();
+    for h in hits {
+        if due_ids.contains(&h.chunk_id) {
+            due_hits.push(h);
+        } else {
+            novel_hits.push(h);
+        }
+    }
+    let hits: Vec<_> = due_hits.into_iter().chain(novel_hits).collect();
 
     // Also match the query against document source_paths — a student
     // searching "chemie" should land on `chemie-periodicka-soustava.md`
@@ -365,6 +413,7 @@ fn pick_across(
                 source_text: None,
                 rephrased_id: None,
                 similarity: None,
+            cloze_span: None,
             });
             if total >= budget {
                 break;
@@ -419,6 +468,7 @@ fn pick_chapter(
             source_text: None,
             rephrased_id: None,
             similarity: None,
+            cloze_span: None,
         });
         if total >= budget * 2 {
             // Chapters can exceed the budget — let them; longer passages
@@ -522,6 +572,7 @@ fn pick_exam_prep(
                 source_text: None,
                 rephrased_id: None,
                 similarity: None,
+            cloze_span: None,
             });
             if total >= budget * 2 {
                 break;
@@ -766,6 +817,7 @@ fn expand_whole_documents(
                 source_text: None,
                 rephrased_id: None,
                 similarity: None,
+            cloze_span: None,
             });
             if total >= budget * 2 {
                 return Ok(out);
@@ -818,6 +870,104 @@ pub fn pick_document(
     let budget = char_budget(duration_s);
     let doc_ids: std::collections::HashSet<i64> = [document_id].into_iter().collect();
     expand_whole_documents(conn, &doc_ids, budget)
+}
+
+/// **Cloze** mode — retrieval practice. Pick content sentences the
+/// same way Content/Across does, then blank the highest-information
+/// word in each (longest alphabetic token, avoiding stopwords). The
+/// student types the full sentence from context; the display masks
+/// the hidden word with the right number of placeholders.
+fn pick_cloze(
+    conn: &Connection,
+    _user_id: i64,
+    req: &SessionRequest,
+) -> Result<Vec<SessionSentence>> {
+    // Reuse Across with a relaxed budget — we'll keep fewer sentences
+    // because each is mentally heavier.
+    let sentences = match req.query.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(q) => pick_across(conn, q, char_budget(req.target_duration_s), &req.pinned_source_prefixes)?,
+        None => {
+            let budget = char_budget(req.target_duration_s);
+            let mut out = Vec::new();
+            let mut total = 0usize;
+            for (chunk_id, text, source_path) in
+                least_recently_typed(conn, 60, &req.pinned_source_prefixes)?
+            {
+                if total >= budget {
+                    break;
+                }
+                if is_low_content(&text) {
+                    continue;
+                }
+                total += text.chars().count();
+                out.push(SessionSentence {
+                    chunk_id,
+                    text,
+                    source_path,
+                    is_generated: false,
+                    source_text: None,
+                    rephrased_id: None,
+                    similarity: None,
+                    cloze_span: None,
+                });
+            }
+            out
+        }
+    };
+
+    Ok(sentences.into_iter().filter_map(attach_cloze).collect())
+}
+
+/// Pick a word to blank. Heuristic: longest alphabetic token with >3
+/// chars that isn't a common CZ/SK function word. We also stash the
+/// verbatim source_text so the summary page can show what was hidden.
+fn attach_cloze(mut s: SessionSentence) -> Option<SessionSentence> {
+    const STOPWORDS: &[&str] = &[
+        "a", "i", "že", "se", "je", "na", "do", "za", "od", "po", "pro", "bez",
+        "ale", "nebo", "ani", "jen", "už", "ještě", "byl", "byla", "bylo", "byly",
+        "být", "mít", "když", "pak", "tak", "jak", "co", "který", "která", "které",
+        "jeho", "její", "jejich", "tento", "tato", "toto", "této", "tohoto",
+    ];
+    let chars: Vec<char> = s.text.chars().collect();
+    let mut best_start: Option<usize> = None;
+    let mut best_end: Option<usize> = None;
+    let mut best_len: usize = 0;
+
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_alphabetic() {
+            let start = i;
+            while i < chars.len() && chars[i].is_alphabetic() {
+                i += 1;
+            }
+            let end = i;
+            let word: String = chars[start..end].iter().collect();
+            let word_lower = word.to_lowercase();
+            if word.chars().count() < 4 || STOPWORDS.contains(&word_lower.as_str()) {
+                continue;
+            }
+            if word.chars().count() > best_len {
+                best_len = word.chars().count();
+                best_start = Some(start);
+                best_end = Some(end);
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    let (cs, ce) = (best_start?, best_end?);
+    // Convert char indices → byte indices on the original `text` so
+    // the UI can slice safely.
+    let byte_start: usize = s.text.chars().take(cs).map(char::len_utf8).sum();
+    let byte_len: usize = s.text.chars().skip(cs).take(ce - cs).map(char::len_utf8).sum();
+
+    // Keep the source for the summary reveal.
+    if s.source_text.is_none() {
+        s.source_text = Some(s.text.clone());
+    }
+    s.cloze_span = Some((byte_start, byte_len));
+    Some(s)
 }
 
 fn parse_chapter_id(s: &str) -> Option<(i64, String)> {
@@ -913,6 +1063,7 @@ fn pick_warmup(conn: &Connection, req: &SessionRequest) -> Result<Vec<SessionSen
             source_text: None,
             rephrased_id: None,
             similarity: None,
+            cloze_span: None,
         });
     }
     if out.is_empty() {
@@ -943,6 +1094,7 @@ fn pick_diacritics(conn: &Connection, req: &SessionRequest) -> Result<Vec<Sessio
             source_text: None,
             rephrased_id: None,
             similarity: None,
+            cloze_span: None,
         });
         if total >= budget / 3 {
             break;
@@ -970,6 +1122,7 @@ fn pick_diacritics(conn: &Connection, req: &SessionRequest) -> Result<Vec<Sessio
             source_text: None,
             rephrased_id: None,
             similarity: None,
+            cloze_span: None,
         });
         if total >= 2 * budget / 3 {
             break;
@@ -1007,6 +1160,7 @@ fn pick_diacritics(conn: &Connection, req: &SessionRequest) -> Result<Vec<Sessio
             source_text: None,
             rephrased_id: None,
             similarity: None,
+            cloze_span: None,
         });
     }
 
@@ -1050,6 +1204,7 @@ fn pick_weak_keys(
             source_text: None,
             rephrased_id: None,
             similarity: None,
+            cloze_span: None,
         });
     }
     // Top up with Diacritic drills if the corpus didn't yield enough density.
@@ -1132,6 +1287,7 @@ fn pick_hybrid(
             source_text: None,
             rephrased_id: None,
             similarity: None,
+            cloze_span: None,
         });
     }
     if out.is_empty() {
@@ -1256,6 +1412,7 @@ fn pick_intro_lesson(
             source_text: None,
             rephrased_id: None,
             similarity: None,
+            cloze_span: None,
         })
         .collect())
 }
@@ -1298,6 +1455,7 @@ fn builtin_warmup_drills() -> Vec<SessionSentence> {
         source_text: None,
         rephrased_id: None,
         similarity: None,
+            cloze_span: None,
     })
     .collect()
 }
@@ -1339,6 +1497,7 @@ mod tests {
             language: None,
             lesson_id: None,
             document_id: None,
+            cloze_index: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1362,6 +1521,7 @@ mod tests {
             language: None,
             lesson_id: None,
             document_id: None,
+            cloze_index: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1385,6 +1545,7 @@ mod tests {
             language: None,
             lesson_id: None,
             document_id: None,
+            cloze_index: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1417,6 +1578,7 @@ mod tests {
             language: None,
             lesson_id: None,
             document_id: None,
+            cloze_index: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         let sources: std::collections::HashSet<_> = plan
@@ -1461,6 +1623,7 @@ mod tests {
             language: None,
             lesson_id: None,
             document_id: None,
+            cloze_index: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert_eq!(
@@ -1500,6 +1663,7 @@ mod tests {
             language: None,
             lesson_id: None,
             document_id: None,
+            cloze_index: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1538,6 +1702,7 @@ mod tests {
             language: None,
             lesson_id: None,
             document_id: None,
+            cloze_index: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1559,6 +1724,7 @@ mod tests {
             language: None,
             lesson_id: None,
             document_id: None,
+            cloze_index: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         let n: i64 = conn

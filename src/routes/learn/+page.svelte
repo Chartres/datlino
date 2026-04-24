@@ -99,6 +99,30 @@
       busy = false;
     }
   }
+
+  async function startCloze() {
+    busy = true;
+    error = null;
+    try {
+      const plan = await api.createSession({
+        mode: 'cloze',
+        alpha: 0,
+        target_duration_s: 300
+      });
+      if (!plan.sentences.length) {
+        error =
+          'Cloze cvičení potřebuje tvoje materiály. Přidej složku v Učím se obsah.';
+        return;
+      }
+      currentSession.plan = plan;
+      currentSession.summary = null;
+      await goto('/practice/session');
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
 <section class="hero">
@@ -188,6 +212,24 @@
       Generovaný drill pro české znaky. Funguje i bez tvých materiálů.
     </p>
     <span class="tile-cta">Procvičit háčky →</span>
+  </button>
+
+  <button
+    type="button"
+    class="tile"
+    onclick={startCloze}
+    onkeydown={(e) => e.key === 'Enter' && startCloze()}
+    tabindex="0"
+    aria-disabled={busy}
+  >
+    <span class="tile-icon">⎕</span>
+    <h3>Doplň chybějící slovo</h3>
+    <p>Cloze drill ze tvých materiálů — silná retrieval practice.</p>
+    <p class="subtitle">
+      Jedno klíčové slovo ve větě schované. Napíšeš ji celou —
+      pamatování + klávesy zároveň.
+    </p>
+    <span class="tile-cta">Začít cloze →</span>
   </button>
 </section>
 

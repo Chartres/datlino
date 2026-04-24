@@ -4,7 +4,8 @@ export type PracticeMode =
   | 'diacritics'
   | 'weak_keys'
   | 'hybrid'
-  | 'intro_lesson';
+  | 'intro_lesson'
+  | 'cloze';
 
 export type LessonListItem = {
   id: string;
@@ -61,6 +62,8 @@ export type SessionSentence = {
   source_text?: string;
   rephrased_id?: number;
   similarity?: number;
+  /** [byte_offset, byte_length] of the cloze-hidden word in `text`. */
+  cloze_span?: [number, number];
 };
 
 export type SessionPlan = {

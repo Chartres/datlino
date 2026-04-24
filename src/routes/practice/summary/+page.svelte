@@ -1,13 +1,33 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { api } from '$lib/api';
   import { currentSession } from '$lib/session-store.svelte';
   import { badgeLabels } from '$lib/mode-meta';
 
   const summary = $derived(currentSession.summary);
 
+  let difficulty = $state<number | null>(null);
+  let note = $state('');
+  let reflectionSaved = $state(false);
+
   $effect(() => {
     if (!summary) goto('/practice');
   });
+
+  async function saveReflection() {
+    if (!summary || reflectionSaved) return;
+    try {
+      await api.recordCalibrationReflection(
+        summary.session_id,
+        summary.accuracy_pct,
+        difficulty,
+        note.trim() || null
+      );
+      reflectionSaved = true;
+    } catch {
+      reflectionSaved = true; // best-effort; don't block the summary
+    }
+  }
 </script>
 
 {#if summary}
@@ -87,6 +107,44 @@
         {/each}
       </ul>
     </section>
+  {/if}
+
+  {#if !reflectionSaved}
+    <section class="reflection card">
+      <h3>Jak to šlo?</h3>
+      <p class="muted">
+        Krátká sebereflexe ti časem zlepšuje odhad a učení. Volitelné.
+      </p>
+      <div class="difficulty-row">
+        <span class="label">Obtížnost:</span>
+        {#each [1, 2, 3, 4, 5] as level}
+          <button
+            type="button"
+            class="diff-btn"
+            class:active={difficulty === level}
+            onclick={() => (difficulty = level)}
+          >
+            {level}
+          </button>
+        {/each}
+        <span class="diff-hint">(1 = lehké, 5 = brutální)</span>
+      </div>
+      <textarea
+        placeholder="Co ti šlo? Co by sis dál procvičil? (volitelné)"
+        bind:value={note}
+        rows="2"
+      ></textarea>
+      <div class="refl-actions">
+        <button type="button" onclick={() => (reflectionSaved = true)}>
+          Přeskočit
+        </button>
+        <button type="button" class="primary" onclick={saveReflection}>
+          Uložit reflexi
+        </button>
+      </div>
+    </section>
+  {:else}
+    <p class="muted small">Reflexe uložena. Zobrazí se na Pokroku jako kalibrační bod.</p>
   {/if}
 
   <section class="next">
@@ -231,5 +289,75 @@
   }
   .next a:not(.primary):hover {
     color: #b3271f;
+  }
+
+  .reflection {
+    background: #fffaf2;
+    border: 1px solid rgba(28, 25, 23, 0.08);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+  }
+  .reflection h3 {
+    margin: 0 0 0.25rem;
+    font-size: 1rem;
+  }
+  .difficulty-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.75rem 0;
+    flex-wrap: wrap;
+  }
+  .difficulty-row .label { margin-right: 0.4rem; color: #44403c; }
+  .diff-btn {
+    width: 2rem;
+    height: 2rem;
+    border: 1px solid rgba(28, 25, 23, 0.15);
+    background: #fff;
+    border-radius: 50%;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+    color: #44403c;
+  }
+  .diff-btn.active {
+    background: #b3271f;
+    border-color: #b3271f;
+    color: #fffaf2;
+  }
+  .diff-hint {
+    color: #78716c;
+    font-size: 0.8rem;
+    margin-left: 0.5rem;
+  }
+  textarea {
+    width: 100%;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid rgba(28, 25, 23, 0.15);
+    border-radius: 5px;
+    font: inherit;
+    background: #fff;
+    resize: vertical;
+  }
+  .refl-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    margin-top: 0.5rem;
+  }
+  .refl-actions button {
+    padding: 0.5rem 1rem;
+    border: 1px solid rgba(28, 25, 23, 0.2);
+    background: transparent;
+    border-radius: 5px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .refl-actions button.primary {
+    border-color: #b3271f;
+    background: #b3271f;
+    color: #fffaf2;
+    font-weight: 600;
   }
 </style>

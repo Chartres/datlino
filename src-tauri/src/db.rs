@@ -229,6 +229,33 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (user_id, lesson_id)
     );
     "#,
+    // 0008 — FSRS state per (user, chunk). Drives spaced-repetition
+    // prioritisation in the session generator. See `fsrs.rs`.
+    r#"
+    CREATE TABLE IF NOT EXISTS chunk_fsrs (
+        user_id INTEGER NOT NULL,
+        chunk_id INTEGER NOT NULL REFERENCES chunk(id) ON DELETE CASCADE,
+        stability REAL NOT NULL DEFAULT 0,
+        difficulty REAL NOT NULL DEFAULT 0,
+        due_at INTEGER NOT NULL DEFAULT 0,
+        last_review INTEGER NOT NULL DEFAULT 0,
+        reps INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, chunk_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_fsrs_due ON chunk_fsrs(user_id, due_at ASC);
+    "#,
+    // 0009 — pre-session calibration + post-session metacognition logs.
+    // Feeds into the Pokrok page: calibration curve over time.
+    r#"
+    CREATE TABLE IF NOT EXISTS calibration (
+        session_id INTEGER PRIMARY KEY REFERENCES session(id) ON DELETE CASCADE,
+        predicted_accuracy_pct REAL NOT NULL,
+        actual_accuracy_pct REAL,
+        reflection_difficulty INTEGER,  -- 1 (easy) .. 5 (hard)
+        reflection_note TEXT,
+        created_at INTEGER NOT NULL
+    );
+    "#,
 ];
 
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
