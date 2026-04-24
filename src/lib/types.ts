@@ -160,6 +160,13 @@ export type EmbedProgress = {
   total_chunks: number;
 };
 
+export type ClaudeSubscriptionStatus = {
+  detected: boolean;
+  expired: boolean;
+  subscription_type: string | null;
+  source: string | null;
+};
+
 export type SearchHit = {
   chunk_id: number;
   document_id: number;

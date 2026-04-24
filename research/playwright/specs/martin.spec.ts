@@ -26,52 +26,51 @@ test.describe('Martin, 18 — technical power user', () => {
     openFile('martin', 'Nejdřív Settings. Chci vědět co to provider dělá.');
   });
 
-  test('settings page reveals provider + OCR + rephrase', async ({ page }) => {
+  test('settings are 4 collapsible sections — no overload by default', async ({ page }) => {
     await page.goto('/settings');
-    await page.waitForSelector('h2');
+    await page.waitForSelector('details.section');
 
-    const tiles = await page.$$eval('.tile strong', (els) =>
-      els.map((e) => e.textContent?.trim())
-    );
+    const titles = await page.locator('details.section .sec-title').allTextContents();
+    record({
+      persona: 'martin',
+      moment: 'settings-sections',
+      note: `Sekce: ${JSON.stringify(titles)}. Čtyři. Hierarchie dává smysl.`,
+      severity: 'delight'
+    });
+
+    // Open Kvalita vyhledávání, verify provider tiles.
+    await page.locator('details.section').nth(1).locator('summary').click();
+    await page.waitForTimeout(150);
+    const tiles = await page.locator('.tiles .tile strong').allTextContents();
     record({
       persona: 'martin',
       moment: 'provider-tiles',
-      note: `Dostupné providery: ${JSON.stringify(tiles)}. Oceňuji, že "Lokální Candle" je první třídní volba a ne greyed-out.`,
+      note: `Dostupné providery: ${JSON.stringify(tiles)}. "Lokální Candle" je první — dobré defaulty.`,
       severity: 'delight'
     });
 
-    // Click Candle.
-    await page.click('.tile:has-text("Lokální Candle")');
-    await page.waitForTimeout(500);
+    // Open Remix → verify the Claude subscription card exists
+    await page.locator('details.section').nth(2).locator('summary').click();
+    await page.waitForTimeout(150);
+    const subCardHeading = await page.locator('.auth-card h4').first().textContent();
     record({
       persona: 'martin',
-      moment: 'switch-to-candle',
-      note: `Kliknutí na Candle mě nic nestálo — v tomhle prostředí model není stažený, ale UI to hlásí jako úspěch. V realitě by to mělo ukázat progress stahování.`,
-      severity: 'confusion'
-    });
-
-    // Check the OCR section: the mock says both binaries are missing.
-    const ocrBadges = await page.$$eval('.binlist li', (els) =>
-      els.map((e) => e.textContent?.replace(/\s+/g, ' ').trim())
-    );
-    record({
-      persona: 'martin',
-      moment: 'ocr-section',
-      note: `OCR stav: ${JSON.stringify(ocrBadges)}. Instalační nápovědu vidím: brew / apt. Dobrý.`,
+      moment: 'claude-sub-card',
+      note: `Remix sekce má auth card: "${subCardHeading?.trim()}". Claude subscription je primární auth, BYOK fallback. Konečně.`,
       severity: 'delight'
     });
 
-    // Rephrase card — Anthropic key + console deep-link.
-    const anthropicLabel = await page
-      .locator('button.secondary:has-text("Anthropic")')
-      .count();
+    // Open OCR, check for "Zkontrolovat znovu" (Tereza's C6 fix).
+    await page.locator('details.section').nth(3).locator('summary').click();
+    await page.waitForTimeout(150);
+    const recheck = await page.locator('button:has-text("Zkontrolovat znovu")').count();
     record({
       persona: 'martin',
-      moment: 'anthropic-deep-link',
-      note: anthropicLabel > 0
-        ? 'Tlačítko "Otevřít Anthropic Console" existuje. OAuth flow stále chybí, ale console deep-link je OK cesta pro teď.'
-        : 'Nenašel jsem deep-link na Anthropic Console — škoda.',
-      severity: anthropicLabel > 0 ? 'delight' : 'confusion'
+      moment: 'ocr-recheck',
+      note: recheck > 0
+        ? '"Zkontrolovat znovu" tlačítko přítomno — C6 fixed.'
+        : 'Chybí re-check tlačítko.',
+      severity: recheck > 0 ? 'delight' : 'blocker'
     });
 
     await page.screenshot({

@@ -3,6 +3,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import type {
   AttemptRecord,
   ChapterInfo,
+  ClaudeSubscriptionStatus,
   DocumentInfo,
   EmbedProgress,
   EmbeddingProviderKind,
@@ -60,6 +61,8 @@ export const api = {
     invoke<void>('set_anthropic_api_key', { key }),
   anthropicKeyPresent: () => invoke<boolean>('anthropic_key_present'),
   detectAnthropicEnvKey: () => invoke<string | null>('detect_anthropic_env_key'),
+  claudeSubscriptionStatus: () =>
+    invoke<ClaudeSubscriptionStatus>('claude_subscription_status'),
 
   // intro lessons
   listIntroLessons: () => invoke<LessonListItem[]>('list_intro_lessons'),

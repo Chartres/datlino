@@ -40,13 +40,24 @@ test.describe('Jonáš, 15 — offline on the train', () => {
     });
   });
 
-  test('settings page does not hide the "no network" state', async ({ page }) => {
+  test('settings provider info visible by one click', async ({ page }) => {
     await page.goto('/settings');
-    await page.waitForSelector('.card');
+    await page.waitForSelector('details.section');
+    const providerSub = await page
+      .locator('details.section')
+      .nth(1)
+      .locator('.sec-sub')
+      .textContent();
     record({
       persona: 'jonas',
-      moment: 'settings-provider',
-      note: 'Provider je "Lokální heuristika" (Fake). Žádný banner upozorňující "funguje offline". Student jako já by ocenil explicitní potvrzení.',
+      moment: 'settings-provider-strip',
+      note: `Kvalita vyhledávání sekce hlásí: "${providerSub?.trim()}". Provider je vidět i bez rozkliknutí — Jonáš zavře a jede.`,
+      severity: 'delight'
+    });
+    record({
+      persona: 'jonas',
+      moment: 'offline-banner',
+      note: 'Explicitní "funguje offline" banner stále chybí — open ask (UX-007).',
       severity: 'confusion'
     });
   });

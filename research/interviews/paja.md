@@ -1,17 +1,24 @@
 
-## Session 2026-04-24T00:30:01.399Z
+## Session 2026-04-24T01:25:40.420Z
 
 > Co je nového v tomhle buildu?
 
 - **[about-renders]** _(delight)_ Změnové hlavičky: 1 h1 / 3 h2 / 2 ul. Markdown se renderuje v aplikaci jako na webu.
 - **[about-top-section]** _(delight)_ Nahoře vidím IA reorg položku — nejnovější změnu, kterou jsem právě zažila.
 
-## Session 2026-04-24T00:30:05.444Z
+## Session 2026-04-24T01:25:40.769Z
+
+> Mám Claude Pro. Doufám, že si Datlino načte můj login a nebudu muset platit dvakrát.
+
+- **[remix-live-sub]** _(delight)_ Auth-card ukazuje pills: ["Aktivní"]. Měla by být "Aktivní" pro live subscription.
+- **[remix-sec-sub]** _(delight)_ Nadpis sekce říká: "Přihlášen přes Claude pro". Rychlý indikátor stavu přímo v collapsed summary.
+
+## Session 2026-04-24T01:25:44.851Z
 
 > Přidala jsem si dějepis složku. Teď chci uvidět, jestli mi to pomůže se učit na maturitu.
 
 
-## Session 2026-04-24T00:30:05.453Z
+## Session 2026-04-24T01:25:44.911Z
 
 > Přidala jsem si dějepis složku. Teď chci uvidět, jestli mi to pomůže se učit na maturitu.
 
@@ -19,7 +26,7 @@
 - **[study-docs]** _(delight)_ Studijní stránka ukazuje dokumenty: ["habsburkove","chemie-periodicka-soustava"]. Studijní strategie nahoře, dokumenty dole — logika čtení.
 - **[drill-doc-first-char]** _(delight)_ Klikla jsem na dokument a rovnou jsem v tréninku. První znak: "H". To je ta věta, kterou budu psát. Jednoklik-to-flow je dobrý.
 
-## Session 2026-04-24T00:30:05.925Z
+## Session 2026-04-24T01:25:45.338Z
 
 > Přidala jsem si dějepis složku. Teď chci uvidět, jestli mi to pomůže se učit na maturitu.
 

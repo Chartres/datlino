@@ -8,7 +8,24 @@ Dates use the commit day. The `[ref]` handles point at backlog items in
 
 ## Unreleased
 
-_(in progress — see `research/plan/BACKLOG.md` for the full plan)_
+**Settings regroup + Sign in with Claude.** `[IA-007 AI-001 ING-008]`
+
+- **Settings** is now four collapsible sections — **Profil** (your
+  stats and baseline), **Kvalita vyhledávání** (embedding provider
+  + Cohere key), **Remix** (AI přepis), and **OCR**. Only Profil is
+  open by default. Eliška never sees the infrastructure unless she
+  opens it; Martin can expand everything in four clicks.
+- **Sign in with Claude.** Datlino now detects Claude Code's OAuth
+  credentials on your machine (from `~/.claude/.credentials.json` or
+  the OS keychain) and uses them as Bearer auth against the Anthropic
+  Messages API — Remix runs on your **own Pro / Max subscription
+  quota**, not a separate BYOK bill. If the token is present and
+  valid, an **Aktivní** pill shows under Remix; if expired, we nudge
+  you to run `claude login` again. BYOK API key remains as a
+  fallback for users without Claude Code.
+- **OCR re-check.** After installing `tesseract` + `pdftoppm`, a
+  **Zkontrolovat znovu** button refreshes the status without
+  restarting the app.
 
 ## 2026-04-24
 

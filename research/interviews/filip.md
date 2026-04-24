@@ -1,5 +1,5 @@
 
-## Session 2026-04-24T00:30:02.400Z
+## Session 2026-04-24T01:25:41.893Z
 
 > Ukaž mi kde jsou prsty. Já na klávesnici nevidím.
 
@@ -7,7 +7,7 @@
 - **[highlighted-key]** _(delight)_ Svítí mi klávesa "a". Hned vím kam dát prst.
 - **[home-row-dots]** _(delight)_ Vidím 4 puntíků na klávesách — stejně jako na fyzické klávesnici F a J.
 
-## Session 2026-04-24T00:30:02.840Z
+## Session 2026-04-24T01:25:42.449Z
 
 > Ukaž mi kde jsou prsty. Já na klávesnici nevidím.
 

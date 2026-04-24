@@ -1,13 +1,13 @@
 
-## Session 2026-04-24T00:30:06.020Z
+## Session 2026-04-24T01:25:45.447Z
 
 > Moje poznámky jsou PDF z GoodNotes. Obrázky rukopisu.
 
-- **[ocr-help]** _(info)_ OCR sekce: "OCR (skenované PDF a GoodNotes) Když PDF obsahuje jen obrázky (např. export z GoodNotes nebo naskenovaná učebnice), Datlino si přečte text pomocí tesseract + pdftoppm. tesseract: chybí pdftoppm: chybí..."
-- **[install-hint]** _(delight)_ Vidím brew příkaz pro macOS. Tereza to skopíruje a spustí. OK.
-- **[after-install-feedback]** _(confusion)_ Otevřená otázka: po `brew install tesseract poppler` aplikace sama nic neudělá — musím zavřít a otevřít? Přežil by tu tlačítko "Zkontrolovat znovu".
+- **[ocr-section]** _(info)_ OCR body: "Když PDF obsahuje jen obrázky (sken učebnice nebo export z GoodNotes), Datlino přečte text pomocí tesseract + pdftoppm. tesseract: chybí pdftoppm: chybí Na macO..."
+- **[install-hint]** _(delight)_ Vidím brew příkaz — Tereza skopíruje.
+- **[recheck-button]** _(delight)_ "Zkontrolovat znovu" tlačítko existuje. Po `brew install` stisknu a UI se obnoví. C6 resolved.
 
-## Session 2026-04-24T00:30:06.380Z
+## Session 2026-04-24T01:25:45.912Z
 
 > Moje poznámky jsou PDF z GoodNotes. Obrázky rukopisu.
 

@@ -3,6 +3,7 @@
 //! Exposes the Tauri commands the SvelteKit frontend invokes and bundles
 //! the runtime modules. `main.rs` is a thin shim that calls `run()`.
 
+pub mod claude_auth;
 pub mod db;
 pub mod embeddings;
 pub mod ingest;
@@ -290,6 +291,11 @@ fn detect_anthropic_env_key() -> std::result::Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn claude_subscription_status() -> std::result::Result<claude_auth::SubscriptionStatus, String> {
+    claude_auth::status().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn list_intro_lessons(
     state: State<'_, AppState>,
 ) -> std::result::Result<Vec<progress::LessonListItem>, String> {
@@ -416,6 +422,7 @@ pub fn run() {
             set_anthropic_api_key,
             anthropic_key_present,
             detect_anthropic_env_key,
+            claude_subscription_status,
             list_intro_lessons,
             list_documents,
             ingest_single_file,

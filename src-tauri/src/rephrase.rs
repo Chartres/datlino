@@ -26,6 +26,7 @@ use anyhow::{anyhow, bail, Result};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
+use crate::claude_auth;
 use crate::db::now_unix;
 use crate::embeddings::{self, EmbeddingProvider};
 
@@ -33,6 +34,11 @@ const KEYCHAIN_SERVICE: &str = "org.datlino.app";
 const KEYCHAIN_ENTRY_ANTHROPIC: &str = "anthropic-api-key";
 const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
 const DEFAULT_SIMILARITY_FLOOR: f32 = 0.85;
+
+enum AuthPlan {
+    Subscription(String),
+    ApiKey(String),
+}
 
 pub fn read_anthropic_key() -> Result<Option<String>> {
     match keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ENTRY_ANTHROPIC) {
@@ -112,9 +118,6 @@ pub fn rephrase_sentence(
     req: &RephraseRequest<'_>,
     provider: &dyn EmbeddingProvider,
 ) -> Result<RephraseOutcome> {
-    let key = read_anthropic_key()?
-        .ok_or_else(|| anyhow!("Rephrase mode needs an Anthropic API key in settings"))?;
-
     let sys = system_prompt(req.language, req.style);
     let user = user_prompt(req);
 
@@ -127,10 +130,48 @@ pub fn rephrase_sentence(
         ],
     });
 
-    let resp = ureq::post("https://api.anthropic.com/v1/messages")
-        .set("x-api-key", &key)
+    // Prefer the student's Claude subscription (Pro/Max) if Claude Code
+    // has cached OAuth credentials on this machine — Bearer auth with
+    // the OAuth beta header routes usage through their plan, not our
+    // bill. Fall back to BYOK API key, then explain clearly.
+    let sub = claude_auth::detect();
+    let auth_plan = match sub {
+        Some(s) if !claude_auth::is_expired(&s) => AuthPlan::Subscription(s.access_token),
+        Some(_) => {
+            // Token present but expired — prefer BYOK fallback; otherwise
+            // tell the student to re-login.
+            match read_anthropic_key()? {
+                Some(k) => AuthPlan::ApiKey(k),
+                None => bail!(
+                    "Tvůj Claude subscription token vypršel. \
+                     Spusť `claude login` v terminálu a zkus to znovu."
+                ),
+            }
+        }
+        None => match read_anthropic_key()? {
+            Some(k) => AuthPlan::ApiKey(k),
+            None => bail!(
+                "Rephrase mode potřebuje přihlášení — buď spusť \
+                 `claude login` (doporučené, používá tvé předplatné), \
+                 nebo vlož Anthropic API klíč v Nastavení."
+            ),
+        },
+    };
+
+    let mut request = ureq::post("https://api.anthropic.com/v1/messages")
         .set("anthropic-version", "2023-06-01")
-        .set("content-type", "application/json")
+        .set("content-type", "application/json");
+    match &auth_plan {
+        AuthPlan::Subscription(token) => {
+            request = request
+                .set("Authorization", &format!("Bearer {token}"))
+                .set("anthropic-beta", "oauth-2025-04-20");
+        }
+        AuthPlan::ApiKey(key) => {
+            request = request.set("x-api-key", key);
+        }
+    }
+    let resp = request
         .send_json(body)
         .map_err(|e| anyhow!("anthropic: {e}"))?;
     let parsed: AnthropicResponse = resp.into_json()?;

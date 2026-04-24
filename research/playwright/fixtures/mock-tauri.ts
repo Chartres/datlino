@@ -305,6 +305,17 @@ export async function installMockTauri(page: Page, corpus: MockCorpus) {
         case 'detect_anthropic_env_key':
           return null;
 
+        case 'claude_subscription_status':
+          // Tests can set __MOCK_STATE__.claudeSubscription to flip this.
+          return (
+            (state as any).claudeSubscription || {
+              detected: false,
+              expired: false,
+              subscription_type: null,
+              source: null
+            }
+          );
+
         case 'get_changelog':
           // A short excerpt is enough for the spec to assert structure.
           // In production this comes from include_str! on the real file.

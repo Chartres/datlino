@@ -148,17 +148,36 @@ test.describe('Eliška, 14 — absolute beginner', () => {
     });
   });
 
-  test('settings page feels out of bounds for her', async ({ page }) => {
+  test('settings now hide infrastructure behind 4 collapsible sections', async ({ page }) => {
     await page.goto('/settings');
-    await page.waitForSelector('h2');
-    const sections = await page.$$eval('section h3', (els) =>
-      els.map((e) => e.textContent?.trim())
-    );
+    await page.waitForSelector('details.section');
+
+    // Only "Profil" should be open by default; everything else closed.
+    const openSections = await page
+      .locator('details.section[open] .sec-title')
+      .allTextContents();
     record({
       persona: 'eliska',
-      moment: 'settings-scan',
-      note: `Settings shows: ${JSON.stringify(sections)}. She sees "Aktuální provider", "Vyber provider", "Cohere API klíč", "OCR", "Rephrase mode", "Anthropic klíč". She'd bounce. None of these speak to a 14-year-old beginner.`,
-      severity: 'blocker'
+      moment: 'settings-default-open',
+      note: `Výchozí otevřené sekce: ${JSON.stringify(openSections)}. Měla by být jen "Profil".`,
+      severity: openSections.length === 1 && openSections[0] === 'Profil' ? 'delight' : 'blocker'
+    });
+
+    const titles = await page.locator('details.section .sec-title').allTextContents();
+    record({
+      persona: 'eliska',
+      moment: 'settings-sections',
+      note: `Všechny sekce: ${JSON.stringify(titles)}. Infrastructure (embeddings, OCR, remix) schovaná — Eliška uvidí jen svoje Profil statistiky.`,
+      severity: 'delight'
+    });
+
+    // Profil card shows her stats, no jargon.
+    const profilBody = await page.locator('details.section[open] .section-body').textContent();
+    record({
+      persona: 'eliska',
+      moment: 'profil-stats',
+      note: `Profil sekce: "${profilBody?.replace(/\s+/g, ' ').trim().slice(0, 120)}...". Bez embedding/provider/API.`,
+      severity: 'delight'
     });
   });
 });

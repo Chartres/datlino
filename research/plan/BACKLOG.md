@@ -36,7 +36,7 @@
 | IA-004 | α-slider buried under "Pokročilé" on /study | shipped | e6d4931 |
 | IA-005 | Empty-library invitation card | shipped | e6d4931 |
 | IA-006 | Document filter when >6 docs | shipped | e6d4931 |
-| IA-007 | Settings regrouped into 4 collapsible sections (Profil / Kvalita / Remix / O aplikaci) | planned | — |
+| IA-007 | Settings regrouped into 4 collapsible sections (Profil / Kvalita / Remix / OCR) | shipped | 1244b02 |
 | BR-001 | Brand artwork (Scholarly Peck logo + Integrated Icon) | shipped | 870a9fb |
 | BR-002 | Full visual system derived from approved palette | backlog | — |
 | BR-003 | Animated mascot (peck tempo tracks WPM, tilt on miss) | backlog | — |
@@ -60,7 +60,7 @@
 | PE-012 | Exam-mode curated ramps for Cermat / maturita | backlog | — |
 | PE-013 | Auto-regression alerts ("tenhle bigram se ti zhoršuje 2 týdny") | backlog | — |
 | PE-014 | "Explain back" drill — student types one-sentence summary post-session | backlog | — |
-| AI-001 | Claude subscription auth (use Pro/Max quota via Claude Code creds) | planned | — |
+| AI-001 | Claude subscription auth (use Pro/Max quota via Claude Code creds) | shipped | 1244b02 |
 | AI-002 | Full OAuth "Sign in with Claude" (Datlino as Anthropic OAuth client) | backlog | — |
 | AI-003 | Local Candle embeddings (multilingual-e5-small) | shipped | b0fd48f |
 | AI-004 | Candle download progress UI on provider switch | planned | — |
@@ -74,7 +74,7 @@
 | ING-005 | Filename-aware search | shipped | b0fd48f |
 | ING-006 | Tesseract + pdftoppm OCR dispatch | shipped | 7025cc7 |
 | ING-007 | Apple Vision OCR path on macOS (native) | backlog | — |
-| ING-008 | "Zkontrolovat znovu" OCR button after user installs deps | planned | — |
+| ING-008 | "Zkontrolovat znovu" OCR button after user installs deps | shipped | 1244b02 |
 | ING-009 | Ingest progress events (files, chunks, embeddings) streamed to UI | backlog | — |
 | UX-001 | Lesson target phrased in human-readable language, not raw WPM | planned | — |
 | UX-002 | Candle silent-switch fixed (progress or no-op message) | planned | — |

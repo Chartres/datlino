@@ -12,33 +12,50 @@ test.describe('Tereza, 16 — GoodNotes PDFs', () => {
     openFile('tereza', 'Moje poznámky jsou PDF z GoodNotes. Obrázky rukopisu.');
   });
 
-  test('settings surface tells her what to install', async ({ page }) => {
+  test('settings OCR section tells her what to install AND offers re-check', async ({ page }) => {
     await page.goto('/settings');
-    await page.waitForSelector('h2');
+    await page.waitForSelector('details.section');
 
-    const ocrSection = await page.locator('section').filter({ hasText: 'OCR' }).textContent();
+    // OCR is section 4, index 3. Expand it.
+    await page.locator('details.section').nth(3).locator('summary').click();
+    await page.waitForTimeout(100);
+
+    const ocrBody = await page
+      .locator('details.section')
+      .nth(3)
+      .locator('.section-body')
+      .textContent();
     record({
       persona: 'tereza',
-      moment: 'ocr-help',
-      note: `OCR sekce: "${ocrSection?.replace(/\s+/g, ' ').trim().slice(0, 200)}..."`,
+      moment: 'ocr-section',
+      note: `OCR body: "${ocrBody?.replace(/\s+/g, ' ').trim().slice(0, 160)}..."`,
       severity: 'info'
     });
 
-    const hintBrewVisible = await page.locator('section:has-text("OCR") code:has-text("brew")').count();
+    const hintBrewVisible = await page
+      .locator('details.section')
+      .nth(3)
+      .locator('code:has-text("brew")')
+      .count();
     record({
       persona: 'tereza',
       moment: 'install-hint',
       note: hintBrewVisible > 0
-        ? 'Vidím brew příkaz pro macOS. Tereza to skopíruje a spustí. OK.'
-        : 'Instalační nápověda chybí — to je blocker.',
+        ? 'Vidím brew příkaz — Tereza skopíruje.'
+        : 'Instalační nápověda chybí.',
       severity: hintBrewVisible > 0 ? 'delight' : 'blocker'
     });
 
+    const recheckBtn = await page
+      .locator('button:has-text("Zkontrolovat znovu")')
+      .count();
     record({
       persona: 'tereza',
-      moment: 'after-install-feedback',
-      note: 'Otevřená otázka: po `brew install tesseract poppler` aplikace sama nic neudělá — musím zavřít a otevřít? Přežil by tu tlačítko "Zkontrolovat znovu".',
-      severity: 'confusion'
+      moment: 'recheck-button',
+      note: recheckBtn > 0
+        ? '"Zkontrolovat znovu" tlačítko existuje. Po `brew install` stisknu a UI se obnoví. C6 resolved.'
+        : 'Re-check tlačítko chybí — C6 pořád otevřené.',
+      severity: recheckBtn > 0 ? 'delight' : 'blocker'
     });
   });
 
