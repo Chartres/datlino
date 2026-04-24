@@ -36,41 +36,37 @@ test.describe('Pája, 17 — maturita student', () => {
     );
   });
 
-  test('lands on a library with her docs visible', async ({ page }) => {
+  test('lands on home, opens study door, sees her docs', async ({ page }) => {
     await page.goto('/');
-    await page.waitForSelector('section');
+    await page.waitForSelector('.door.study');
+    const studyMeta = await page.locator('.door.study .door-meta').textContent();
+    record({
+      persona: 'paja',
+      moment: 'home-study-door',
+      note: `Home page door pro studium říká: "${studyMeta?.trim()}". Vidím rovnou počet souborů a vět.`,
+      severity: 'delight'
+    });
 
+    await page.click('a.door.study');
+    await page.waitForURL('**/study');
     const docs = await page.$$eval('.docs li .doc-name', (els) =>
       els.map((e) => e.textContent?.trim())
     );
     record({
       persona: 'paja',
-      moment: 'library-docs',
-      note: `Library shows documents: ${JSON.stringify(docs)}. Dvě soubory — to je málo na reálnou maturitu. V realitě bych měla 30+ PDF.`,
-      severity: 'info'
-    });
-
-    // She searches "chemie" — which lives only in the filename.
-    await page.fill('input[placeholder*="Habsburkové"]', 'chemie');
-    await page.click('button.primary:has-text("Hledat")');
-    await page.waitForTimeout(500);
-
-    const hitCount = await page.locator('.hits li').count();
-    record({
-      persona: 'paja',
-      moment: 'chemie-search',
-      note: `"chemie" found ${hitCount} hits. Předchozí verze vracela 1; pokud backend dopadá na název souboru, měla bych vidět víc. V Playwright mocku hledám jen v textu → 0. V reálné aplikaci by to mělo být lepší.`,
-      severity: hitCount === 0 ? 'confusion' : 'delight'
+      moment: 'study-docs',
+      note: `Studijní stránka ukazuje dokumenty: ${JSON.stringify(docs)}. Studijní strategie nahoře, dokumenty dole — logika čtení.`,
+      severity: 'delight'
     });
 
     await page.screenshot({
-      path: 'research/playwright/screenshots/paja-library.png',
+      path: 'research/playwright/screenshots/paja-study.png',
       fullPage: true
     });
   });
 
-  test('drills a whole document directly', async ({ page }) => {
-    await page.goto('/');
+  test('drills a whole document directly from /study', async ({ page }) => {
+    await page.goto('/study');
     await page.waitForSelector('.docs li');
     const habsDoc = page.locator('.docs li').filter({ hasText: 'habsburkove' });
     await habsDoc.locator('button').click();
@@ -87,15 +83,15 @@ test.describe('Pája, 17 — maturita student', () => {
   });
 
   test('tries exam-prep with a natural-language topic', async ({ page }) => {
-    await page.goto('/practice');
+    await page.goto('/study');
+    await page.waitForSelector('.strategies');
 
-    await page.click('.mode:has-text("Moje materiály")');
     await page.click('.strategy:has-text("Příprava na zkoušku")');
     await page.fill(
       'input[type="text"]',
       'Habsburkové a jejich reformy v 17. a 18. století'
     );
-    await page.click('button.primary:has-text("Začít")');
+    await page.click('button.primary.big:has-text("Začít")');
     await page.waitForTimeout(800);
 
     const urlAfter = page.url();

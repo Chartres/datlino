@@ -9,8 +9,9 @@
   });
 
   const navItems = [
-    { href: '/', label: 'Knihovna' },
-    { href: '/practice', label: 'Trénink' },
+    { href: '/', label: 'Domů' },
+    { href: '/learn', label: 'Učím se psát' },
+    { href: '/study', label: 'Učím se obsah' },
     { href: '/progress', label: 'Pokrok' },
     { href: '/settings', label: 'Nastavení' }
   ];

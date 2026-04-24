@@ -1,404 +1,201 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
   import { api } from '$lib/api';
   import { profile } from '$lib/profile.svelte';
-  import { currentSession } from '$lib/session-store.svelte';
-  import type { DocumentInfo, IndexStatus, SearchHit } from '$lib/types';
+  import type { IndexStatus, LessonListItem } from '$lib/types';
 
   let status = $state<IndexStatus | null>(null);
-  let documents = $state<DocumentInfo[]>([]);
-  let error = $state<string | null>(null);
-  let busy = $state(false);
-
-  let query = $state('');
-  let hits = $state<SearchHit[]>([]);
-
-  async function refreshStatus() {
-    try {
-      [status, documents] = await Promise.all([
-        api.indexStatus(),
-        api.listDocuments()
-      ]);
-    } catch (e) {
-      error = String(e);
-    }
-  }
-
-  async function pickAndAddFolder() {
-    error = null;
-    try {
-      const picked = await api.pickFolder();
-      if (!picked) return;
-      busy = true;
-      await api.addWatchedFolder(picked);
-      await refreshStatus();
-    } catch (e) {
-      error = String(e);
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function pickAndIngestFile() {
-    error = null;
-    try {
-      const picked = await api.pickFile();
-      if (!picked) return;
-      busy = true;
-      await api.ingestSingleFile(picked);
-      await refreshStatus();
-    } catch (e) {
-      error = String(e);
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function removeFolder(path: string) {
-    busy = true;
-    try {
-      await api.removeWatchedFolder(path);
-      await refreshStatus();
-    } catch (e) {
-      error = String(e);
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function runSearch() {
-    if (!query.trim()) return;
-    busy = true;
-    error = null;
-    try {
-      hits = await api.searchChunks(query.trim(), 10);
-    } catch (e) {
-      error = String(e);
-      hits = [];
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function drillDocument(doc: DocumentInfo) {
-    busy = true;
-    error = null;
-    try {
-      const plan = await api.createSession({
-        mode: 'content',
-        alpha: 1.0,
-        target_duration_s: 600,
-        document_id: doc.id
-      });
-      if (!plan.sentences.length) {
-        error = 'Dokument nemá žádné věty k trénování.';
-        return;
-      }
-      currentSession.plan = plan;
-      currentSession.summary = null;
-      await goto('/practice/session');
-    } catch (e) {
-      error = String(e);
-    } finally {
-      busy = false;
-    }
-  }
-
-  function docName(path: string): string {
-    const parts = path.split(/[\\/]/);
-    return parts[parts.length - 1];
-  }
+  let lessons = $state<LessonListItem[]>([]);
+  let loading = $state(true);
 
   $effect(() => {
-    refreshStatus();
+    void reload();
   });
+
+  async function reload() {
+    loading = true;
+    try {
+      [status, lessons] = await Promise.all([
+        api.indexStatus(),
+        api.listIntroLessons()
+      ]);
+    } finally {
+      loading = false;
+    }
+  }
+
+  const passedLessons = $derived(lessons.filter((l) => l.passed).length);
+  const totalLessons = $derived(lessons.length);
+  const hasLibrary = $derived((status?.document_count ?? 0) > 0);
+  const totalSessions = $derived(profile.data?.total_sessions ?? 0);
+  const isFirstRun = $derived(totalSessions === 0 && !hasLibrary);
+
+  function greetingKind(): string {
+    const hour = new Date().getHours();
+    if (hour < 9) return 'Dobré ráno';
+    if (hour < 17) return 'Ahoj';
+    return 'Dobrý večer';
+  }
 </script>
 
-<section class="hero">
+<section class="hello">
   <div>
-    <h2>Ahoj {profile.data && profile.data.total_sessions > 0 ? 'zpět' : 'a vítej'}.</h2>
-    <p>
-      Datlino ti pomáhá se učit a zlepšovat psaní naslepo na tvých vlastních
-      poznámkách. Vyber si složku s materiály, nebo rovnou vyzkoušej jeden
-      z tréninkových módů.
-    </p>
-  </div>
-  <a class="cta" href="/practice">Začít trénink →</a>
-</section>
-
-<section>
-  <h3>Knihovna</h3>
-  {#if status}
-    <p class="muted">
-      {status.document_count} dokumentů · {status.chunk_count} vět k tréninku.
-    </p>
-    {#if status.watched_roots.length}
-      <ul class="paths">
-        {#each status.watched_roots as p}
-          <li>
-            <code>{p}</code>
-            <button class="link" onclick={() => removeFolder(p)}>odebrat</button>
-          </li>
-        {/each}
-      </ul>
+    <h2>{greetingKind()}{profile.data && profile.data.total_sessions > 0 ? ' zpět' : ''}.</h2>
+    {#if isFirstRun}
+      <p class="lead">
+        Datlino tě učí psát naslepo <em>a zároveň</em> se učit tvůj
+        studijní obsah. Dvě cesty — pojď se podívat.
+      </p>
+    {:else if !hasLibrary}
+      <p class="lead">
+        Pokračuj v úvodním tréninku, nebo přidej pár poznámek a začni
+        psát reálný obsah.
+      </p>
     {:else}
-      <p class="muted">Zatím není přidána žádná složka.</p>
+      <p class="lead">
+        Máš {status?.document_count} souborů připravených ke studiu.
+        Kam dnes?
+      </p>
     {/if}
-  {/if}
-
-  <div class="actions">
-    <button class="primary" onclick={pickAndAddFolder} disabled={busy}>
-      {busy ? 'Pracuji…' : 'Přidat složku'}
-    </button>
-    <button class="secondary" onclick={pickAndIngestFile} disabled={busy}>
-      Přidat jeden soubor
-    </button>
   </div>
+  {#if profile.data && profile.data.total_sessions > 0}
+    <div class="strip">
+      <span><strong>L{profile.data.level}</strong> · {profile.data.total_xp} XP</span>
+      <span>🔥 {profile.data.current_streak} dní v řadě</span>
+      {#if profile.data.wpm_baseline}
+        <span>{profile.data.wpm_baseline.toFixed(0)} WPM průměr</span>
+      {/if}
+    </div>
+  {/if}
 </section>
 
-{#if documents.length > 0}
-  <section>
-    <h3>Dokumenty</h3>
-    <p class="muted small">
-      Klikni na dokument pro trénink celého souboru po sobě — bez hledání.
+<section class="doors">
+  <a class="door learn" href="/learn">
+    <span class="door-icon">⌨️</span>
+    <h3>Učím se psát</h3>
+    <p>
+      Úvodní lekce od domovské řady po háčky, drill na tvé slabé klávesy.
+      Pro začátečníky i pokročilé.
     </p>
-    <ul class="docs">
-      {#each documents as doc (doc.id)}
-        <li>
-          <div class="doc-info">
-            <span class="doc-name">{docName(doc.source_path)}</span>
-            <span class="doc-meta">
-              {doc.chunk_count} vět · {doc.kind.toUpperCase()}
-            </span>
-          </div>
-          <button class="secondary" onclick={() => drillDocument(doc)} disabled={busy}>
-            Trénovat celý
-          </button>
-        </li>
-      {/each}
-    </ul>
+    {#if totalLessons > 0}
+      <div class="progress-bar" aria-label="Průběh úvodní kurzu">
+        <div class="fill" style={`width: ${(passedLessons / totalLessons) * 100}%`}></div>
+      </div>
+      <span class="progress-label">
+        {passedLessons} z {totalLessons} lekcí zvládnutých
+      </span>
+    {/if}
+    <span class="door-cta">Otevřít →</span>
+  </a>
+
+  <a class="door study" href="/study">
+    <span class="door-icon">📖</span>
+    <h3>Učím se obsah</h3>
+    <p>
+      Piš věty ze svých poznámek. Napříč materiály, celé kapitoly, nebo
+      příprava na konkrétní zkoušku.
+    </p>
+    <div class="door-meta">
+      {#if hasLibrary}
+        {status?.document_count} souborů · {status?.chunk_count} vět připraveno
+      {:else}
+        <em>Zatím prázdno — přidej složku a začni.</em>
+      {/if}
+    </div>
+    <span class="door-cta">Otevřít →</span>
+  </a>
+</section>
+
+{#if profile.data && profile.data.total_sessions > 0}
+  <section class="recent">
+    <h3 class="section-head">Naposledy</h3>
+    <p class="muted small">
+      Podrobnou historii, slabé klávesy a WPM křivku najdeš na
+      <a href="/progress">Pokroku</a>.
+    </p>
   </section>
 {/if}
 
-<section>
-  <h3>Hledat ve svých materiálech</h3>
-  <form
-    onsubmit={(e) => {
-      e.preventDefault();
-      runSearch();
-    }}
-  >
-    <input
-      type="text"
-      placeholder="např. fotosyntéza, Habsburkové, perfektum…"
-      bind:value={query}
-      disabled={busy}
-    />
-    <button type="submit" class="primary" disabled={busy || !query.trim()}>Hledat</button>
-  </form>
-
-  {#if error}
-    <p class="error">{error}</p>
-  {/if}
-
-  {#if hits.length}
-    <ol class="hits">
-      {#each hits as hit}
-        <li>
-          <p class="text">{hit.text}</p>
-          <p class="meta">
-            <span>{hit.source_path}</span>
-            <span>·</span>
-            <span>skóre {hit.score.toFixed(2)}</span>
-          </p>
-        </li>
-      {/each}
-    </ol>
-  {/if}
-</section>
-
 <style>
-  .hero {
+  .hello {
     display: flex;
     gap: 1.5rem;
     align-items: center;
     justify-content: space-between;
-    padding: 1.25rem 1.5rem;
+    padding: 1.5rem 1.75rem;
     background: #fffaf2;
     border: 1px solid rgba(28, 25, 23, 0.08);
-    border-radius: 10px;
-    margin-bottom: 2rem;
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
   }
-
-  .hero h2 {
-    margin: 0 0 0.25rem;
-    font-size: 1.3rem;
-  }
-  .hero p {
-    margin: 0;
-    color: #57534e;
-    font-size: 0.95rem;
-    max-width: 38rem;
-  }
-
-  .cta {
-    padding: 0.6rem 1.1rem;
-    background: #b3271f;
-    color: #fffaf2;
-    border-radius: 6px;
-    text-decoration: none;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  section {
-    margin-bottom: 2.5rem;
-  }
-  h3 {
-    font-size: 1.05rem;
-    margin: 0 0 0.5rem;
-    color: #292524;
-  }
-
-  form {
-    display: flex;
-    gap: 0.5rem;
-    margin: 0.75rem 0;
-  }
-  input[type='text'] {
-    flex: 1;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid rgba(28, 25, 23, 0.2);
-    border-radius: 4px;
-    font: inherit;
-    background: #fffaf2;
-  }
-
-  button.primary {
-    padding: 0.5rem 1rem;
-    border: 1px solid #b3271f;
-    background: #b3271f;
-    color: #fffaf2;
-    border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-  }
-  button.primary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  button.link {
-    background: none;
-    border: none;
-    color: #b3271f;
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.8rem;
-    margin-left: 0.5rem;
-  }
-
-  .muted {
-    color: #78716c;
-    font-size: 0.9rem;
-  }
-  .paths {
-    list-style: none;
-    padding: 0;
-    margin: 0.5rem 0;
-  }
-  .paths li {
-    padding: 0.35rem 0;
-    font-size: 0.9rem;
-  }
-  .paths code {
-    background: rgba(28, 25, 23, 0.05);
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
-  }
-  .hits {
-    padding-left: 1.5rem;
-  }
-  .hits li {
-    margin: 0.75rem 0;
-    padding: 0.5rem 0.75rem;
-    background: #fffaf2;
-    border: 1px solid rgba(28, 25, 23, 0.08);
-    border-radius: 4px;
-  }
-  .text {
-    margin: 0 0 0.25rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.95rem;
-    line-height: 1.5;
-  }
-  .meta {
-    margin: 0;
-    color: #78716c;
-    font-size: 0.8rem;
-    display: flex;
-    gap: 0.5rem;
-  }
-  .error {
-    color: #b3271f;
-  }
-  .actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-  }
-  .small {
-    font-size: 0.85rem;
-  }
-  button.secondary {
-    padding: 0.5rem 1rem;
-    border: 1px solid rgba(28, 25, 23, 0.2);
-    background: transparent;
-    color: #44403c;
-    border-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-  }
-  button.secondary:hover {
-    border-color: #b3271f;
-    color: #b3271f;
-  }
-  button.secondary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .docs {
-    list-style: none;
-    padding: 0;
-    margin: 0.5rem 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 0.5rem;
-  }
-  .docs li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.6rem 0.8rem;
-    background: #fffaf2;
-    border: 1px solid rgba(28, 25, 23, 0.08);
-    border-radius: 6px;
-  }
-  .doc-info {
+  .hello h2 { margin: 0 0 0.5rem; font-size: 1.6rem; }
+  .lead { margin: 0; color: #57534e; max-width: 38rem; line-height: 1.55; }
+  .strip {
     display: flex;
     flex-direction: column;
-    gap: 0.1rem;
-    min-width: 0;
+    gap: 0.3rem;
+    font-size: 0.9rem;
+    color: #44403c;
+    text-align: right;
   }
-  .doc-name {
+  .strip strong { color: #b3271f; }
+
+  .doors {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .door {
+    text-decoration: none;
+    color: inherit;
+    padding: 1.5rem;
+    background: #fffaf2;
+    border: 1px solid rgba(28, 25, 23, 0.1);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    transition: transform 140ms, border-color 140ms, box-shadow 140ms;
+  }
+  .door:hover {
+    transform: translateY(-2px);
+    border-color: rgba(179, 39, 31, 0.5);
+    box-shadow: 0 4px 24px rgba(179, 39, 31, 0.08);
+  }
+  .door.learn { border-top: 3px solid #b3271f; }
+  .door.study { border-top: 3px solid #292524; }
+  .door-icon { font-size: 2.2rem; }
+  .door h3 { margin: 0; font-size: 1.3rem; color: #1c1917; }
+  .door p { margin: 0; color: #57534e; font-size: 0.95rem; line-height: 1.45; }
+  .door-meta { font-size: 0.85rem; color: #78716c; }
+  .door-cta {
+    margin-top: auto;
+    color: #b3271f;
     font-weight: 600;
-    color: #1c1917;
+    font-size: 0.95rem;
+  }
+  .progress-bar {
+    height: 6px;
+    background: rgba(28, 25, 23, 0.08);
+    border-radius: 3px;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    margin-top: 0.5rem;
   }
-  .doc-meta {
-    font-size: 0.75rem;
+  .progress-bar .fill {
+    height: 100%;
+    background: #b3271f;
+    transition: width 200ms;
+  }
+  .progress-label { font-size: 0.78rem; color: #78716c; }
+
+  .section-head {
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: #78716c;
+    margin: 0 0 0.5rem;
   }
+  .recent a { color: #b3271f; }
+  .muted { color: #78716c; }
+  .small { font-size: 0.85rem; }
 </style>

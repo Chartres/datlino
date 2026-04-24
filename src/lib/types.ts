@@ -109,6 +109,14 @@ export type SessionSummary = {
   sentences_attempted: number;
   badges_awarded: string[];
   weak_preview: WeakNgram[];
+  lesson_mastered?: string;
+  lesson_progress?: {
+    lesson_id: string;
+    first_passed_at: number | null;
+    best_wpm: number;
+    best_accuracy: number;
+    attempts: number;
+  };
 };
 
 export type UserProfileView = {

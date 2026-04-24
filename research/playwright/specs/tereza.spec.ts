@@ -42,15 +42,25 @@ test.describe('Tereza, 16 — GoodNotes PDFs', () => {
     });
   });
 
-  test('library shows no documents when library is empty', async ({ page }) => {
-    await page.goto('/');
-    await page.waitForSelector('section');
-    const docCount = await page.locator('.docs li').count();
+  test('empty library now has a proper invitation card', async ({ page }) => {
+    await page.goto('/study');
+    await page.waitForSelector('.empty-invite');
+    const inviteText = await page.locator('.empty-invite p').first().textContent();
     record({
       persona: 'tereza',
-      moment: 'empty-library',
-      note: `Dokumentů: ${docCount}. Prázdný stav je hezky schovaný — ale chybí mi nápověda "vlož PDF z GoodNotes". Přímá pozvánka k akci.`,
-      severity: 'confusion'
+      moment: 'empty-invite',
+      note: `Prázdný stav má pozvánku: "${inviteText?.replace(/\s+/g, ' ').trim().slice(0, 140)}...". Zmiňuje .md, PDF, GoodNotes export. To přesně mluví mým jazykem.`,
+      severity: 'delight'
+    });
+
+    const buttons = await page.$$eval('.empty-actions button', (els) =>
+      els.map((e) => e.textContent?.trim())
+    );
+    record({
+      persona: 'tereza',
+      moment: 'empty-actions',
+      note: `Přímá akce: ${JSON.stringify(buttons)}. Dva primary paths, ne hromada voleb.`,
+      severity: 'delight'
     });
   });
 });

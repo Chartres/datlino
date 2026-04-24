@@ -25,7 +25,7 @@ test.describe('Jonáš, 15 — offline on the train', () => {
   });
 
   test('library + drill works without network claims', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/study');
     await page.waitForSelector('.docs li');
 
     // He clicks the one document to drill it.

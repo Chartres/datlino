@@ -1,26 +1,14 @@
 
-## Session 2026-04-23T23:58:16.154Z
+## Session 2026-04-24T00:20:39.846Z
 
 > Patnáct dokumentů, semestrálka. Prosím ať je to použitelné.
 
 
-## Session 2026-04-23T23:58:16.277Z
-
-> Patnáct dokumentů, semestrálka. Prosím ať je to použitelné.
-
-- **[doc-grid]** _(delight)_ Grid ukazuje 15 dokumentů. Mřížka se naskládá v ~3 sloupcích podle šířky. To funguje pro 15 souborů.
-- **[filter-missing]** _(confusion)_ Chybí filtr / vyhledávání v seznamu dokumentů. Při 200 souborech by se mi dlouho scrollovalo.
-- **[exam-prep-route]** _(confusion)_ ExamPrep se neposunula do session — něco s BM25 a málo materiálem.
-
-## Session 2026-04-23T23:59:52.091Z
+## Session 2026-04-24T00:20:40.110Z
 
 > Patnáct dokumentů, semestrálka. Prosím ať je to použitelné.
 
 - **[doc-grid]** _(delight)_ Grid ukazuje 15 dokumentů. Mřížka se naskládá v ~3 sloupcích podle šířky. To funguje pro 15 souborů.
-- **[filter-missing]** _(confusion)_ Chybí filtr / vyhledávání v seznamu dokumentů. Při 200 souborech by se mi dlouho scrollovalo.
-
-## Session 2026-04-23T23:59:52.380Z
-
-> Patnáct dokumentů, semestrálka. Prosím ať je to použitelné.
-
+- **[filter-present]** _(delight)_ Filtrovací vstup se objevil nad seznamem dokumentů — použitelné pro velké knihovny. Při 200 souborech bych pořád chtěla i grouping podle složky, ale začátek dobrý.
+- **[filter-works]** _(delight)_ Filter "05" zúžil seznam na 1 dokumentů. Podle očekávání.
 - **[exam-prep-route]** _(confusion)_ ExamPrep se neposunula do session — něco s BM25 a málo materiálem.

@@ -13,9 +13,9 @@ test.describe('Filip, 13 — keyboard-first beginner', () => {
   });
 
   test('the on-screen keyboard teaches him where his fingers go', async ({ page }) => {
-    await page.goto('/practice/intro');
-    await page.waitForSelector('.lessons li');
-    await page.locator('.lessons li button').first().click();
+    await page.goto('/learn');
+    await page.waitForSelector('.hero .cta');
+    await page.click('.hero .cta');
     await page.waitForURL('**/practice/session');
     await page.waitForSelector('.keyboard');
 
@@ -85,8 +85,8 @@ test.describe('Filip, 13 — keyboard-first beginner', () => {
   });
 
   test('toggle hides the keyboard for independence training', async ({ page }) => {
-    await page.goto('/practice/intro');
-    await page.locator('.lessons li button').first().click();
+    await page.goto('/learn');
+    await page.click('.hero .cta');
     await page.waitForURL('**/practice/session');
     await page.waitForSelector('.keyboard');
 

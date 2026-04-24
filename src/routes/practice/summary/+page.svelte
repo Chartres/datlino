@@ -90,8 +90,13 @@
   {/if}
 
   <section class="next">
-    <a href="/practice" class="primary">Další sezení →</a>
-    <a href="/progress">Pokrok v čase</a>
+    {#if summary.lesson_mastered || (summary.lesson_progress ?? null) !== null}
+      <a href="/learn" class="primary">Další lekce →</a>
+    {:else}
+      <a href="/study" class="primary">Další sezení →</a>
+    {/if}
+    <a href="/learn">Učím se psát</a>
+    <a href="/progress">Pokrok</a>
   </section>
 {/if}
 

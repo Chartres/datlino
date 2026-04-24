@@ -42,50 +42,64 @@ test.describe('Eliška, 14 — absolute beginner', () => {
     record({
       persona: 'eliska',
       moment: 'nav-scan',
-      note: `Top nav: ${JSON.stringify(navLinks)}. She sees "Trénink" and clicks it.`,
-      severity: 'info'
+      note: `Top nav: ${JSON.stringify(navLinks)}. New IA — "Učím se psát" and "Učím se obsah" are obvious Czech phrases; she picks the first.`,
+      severity: 'delight'
     });
 
-    await page.click('nav a[href="/practice"]');
-    await page.waitForURL('**/practice');
-
-    // She sees six tiles. Which one is for "I don't know how to type"?
-    const modeTitles = await page.$$eval('.mode h3', (els) =>
+    // Home page now has two big doors. She picks the learn one.
+    const doors = await page.$$eval('.door h3', (els) =>
       els.map((e) => e.textContent?.trim())
     );
     record({
       persona: 'eliska',
-      moment: 'practice-picker',
-      note: `She sees these six tiles: ${JSON.stringify(modeTitles)}. "Úvodní lekce" is the first one — good. But also sees "Moje materiály", "Zahřívání", "Diakritika", "Tvá slabá místa", "Mix" — six choices is a lot for a new user.`,
-      severity: 'confusion'
+      moment: 'home-doors',
+      note: `Home page ukazuje dvě velké dveře: ${JSON.stringify(doors)}. Žádný shluk šesti dlaždic. Ulehčení.`,
+      severity: 'delight'
     });
 
-    // She clicks Úvodní lekce. What happens?
-    const introTile = page.locator('.mode').filter({ hasText: 'Úvodní lekce' });
-    await introTile.click();
-    record({
-      persona: 'eliska',
-      moment: 'pick-intro',
-      note: 'Clicking the tile *selects* it but doesn\'t open anything. She has to also click "Začít". Two-click pattern for something that should be one-click for her persona.',
-      severity: 'confusion'
-    });
+    await page.click('a.door.learn');
+    await page.waitForURL('**/learn');
 
-    await page.click('button.primary:has-text("Začít")');
-    await page.waitForURL('**/practice/intro');
-
-    // Lesson list. Is it clear where to start?
-    const lessonTitles = await page.$$eval('.lessons h3', (els) =>
+    // Only three tiles on /learn now: IntroLesson, WeakKeys, Diacritics.
+    const drillTiles = await page.$$eval('.drills .tile h3', (els) =>
       els.map((e) => e.textContent?.trim())
     );
     record({
       persona: 'eliska',
-      moment: 'lesson-list',
-      note: `Sees ${lessonTitles.length} lessons. First one = "${lessonTitles[0]}". Targets "Cíl: 10 WPM · 92% přesnost" mean nothing to her on day 1 — she doesn't know what WPM means yet.`,
+      moment: 'learn-tiles',
+      note: `Na /learn vidím tři dlaždice: ${JSON.stringify(drillTiles)}. "Úvodní lekce" je zvýrazněná s primary border — jasná první volba.`,
+      severity: 'delight'
+    });
+
+    // The big CTA at the top offers "Pokračovat: ..." or "Začít první
+    // lekci" — one-click into first lesson.
+    const ctaText = await page.locator('.hero .cta').textContent();
+    record({
+      persona: 'eliska',
+      moment: 'one-click-cta',
+      note: `Velké tlačítko nahoře říká: "${ctaText?.trim()}". Jedno kliknutí = hned píšu.`,
+      severity: 'delight'
+    });
+
+    await page.click('.hero .cta');
+    await page.waitForURL('**/practice/session');
+    await page.waitForSelector('.typing-surface');
+
+    // Skipped the lesson ladder entirely — direct path. Let's also
+    // verify the ladder is visible if she wants it.
+    await page.goto('/learn');
+    const lessonTitles = await page.$$eval('.lessons h4', (els) =>
+      els.map((e) => e.textContent?.trim())
+    );
+    record({
+      persona: 'eliska',
+      moment: 'lesson-ladder',
+      note: `Ladder under the tiles ukazuje ${lessonTitles.length} lekcí. První = "${lessonTitles[0]}". Targets ("Cíl: 10 WPM · 92% přesnost") pořád nemluví jazykem 14leté začátečnice — to je C2 blocker pořád otevřený.`,
       severity: 'confusion'
     });
 
     // She clicks "Začít" on the first lesson.
-    const firstStart = page.locator('.lessons li button.primary').first();
+    const firstStart = page.locator('.lessons li button').first();
     await firstStart.click();
     await page.waitForURL('**/practice/session');
     await page.waitForSelector('.typing-surface');

@@ -21,7 +21,7 @@ nástup Habsburků. Další věta pro kontext historie.`
   });
 
   test('library renders 15 document tiles without collapsing', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/study');
     await page.waitForSelector('.docs li');
     const count = await page.locator('.docs li').count();
     expect(count).toBe(15);
@@ -32,13 +32,27 @@ nástup Habsburků. Další věta pro kontext historie.`
       severity: 'delight'
     });
 
-    // But a real thesis library is 200+ — is there filtering or grouping?
+    // Filter input appears when docs > 6 — check.
+    const filterPresent = await page.locator('.doc-filter').count();
     record({
       persona: 'lucie',
-      moment: 'filter-missing',
-      note: 'Chybí filtr / vyhledávání v seznamu dokumentů. Při 200 souborech by se mi dlouho scrollovalo.',
-      severity: 'confusion'
+      moment: 'filter-present',
+      note: filterPresent > 0
+        ? 'Filtrovací vstup se objevil nad seznamem dokumentů — použitelné pro velké knihovny. Při 200 souborech bych pořád chtěla i grouping podle složky, ale začátek dobrý.'
+        : 'Filtr chybí — při 200 dokumentech blocker.',
+      severity: filterPresent > 0 ? 'delight' : 'confusion'
     });
+    if (filterPresent > 0) {
+      await page.locator('.doc-filter').fill('05');
+      await page.waitForTimeout(100);
+      const filtered = await page.locator('.docs li').count();
+      record({
+        persona: 'lucie',
+        moment: 'filter-works',
+        note: `Filter "05" zúžil seznam na ${filtered} dokumentů. Podle očekávání.`,
+        severity: 'delight'
+      });
+    }
 
     await page.screenshot({
       path: 'research/playwright/screenshots/lucie-library.png',
@@ -47,14 +61,14 @@ nástup Habsburků. Další věta pro kontext historie.`
   });
 
   test('exam-prep across many docs returns grouped content', async ({ page }) => {
-    await page.goto('/practice');
-    await page.click('.mode:has-text("Moje materiály")');
+    await page.goto('/study');
+    await page.waitForSelector('.strategies');
     await page.click('.strategy:has-text("Příprava na zkoušku")');
     await page.fill(
       'input[type="text"]',
       'Habsburkové Marie Terezie reformy'
     );
-    await page.click('button.primary:has-text("Začít")');
+    await page.click('button.primary.big:has-text("Začít")');
     await page.waitForTimeout(600);
 
     const onSession = page.url().includes('/session');
