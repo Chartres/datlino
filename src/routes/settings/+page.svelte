@@ -489,22 +489,27 @@
     overflow: hidden;
   }
   .section > summary {
-    padding: 0.95rem 1.2rem;
+    padding: 1rem 1.2rem 1rem 1.2rem;
     cursor: pointer;
     display: grid;
-    grid-template-columns: 2rem auto 1fr;
+    grid-template-columns: 2rem auto 1fr 1.2rem;
     gap: 0.8rem;
     align-items: center;
     list-style: none;
   }
   .section > summary::-webkit-details-marker { display: none; }
   .section > summary::after {
-    content: '▸';
+    content: '▾';
+    font-size: 1.15rem;
     color: #78716c;
     justify-self: end;
-    transition: transform 150ms;
+    transition: transform 200ms ease;
+    line-height: 1;
   }
-  .section[open] > summary::after { transform: rotate(90deg); }
+  .section[open] > summary::after {
+    transform: rotate(180deg);
+  }
+  .section > summary:hover::after { color: #b3271f; }
   .sec-num {
     font-size: 1rem;
     font-weight: 700;

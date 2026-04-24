@@ -30,7 +30,42 @@
   let submitting = $state(false);
   let lastKeyTime = $state(0);
 
-  const target = $derived(plan?.sentences[sentenceIndex]?.text ?? '');
+  // Some chunks contain chars the student can't physically type on a CZ
+  // or SK keyboard — subscripts (H₂O), superscripts (m²), smart quotes,
+  // em/en dashes, non-breaking spaces. We normalise the *display* target
+  // so the keystroke log is comparable with the keys the student can
+  // actually press. The raw source text stays intact in the database.
+  const ASCII_NORMALISE: Record<string, string> = {
+    // Subscripts U+2080–U+2089
+    '\u2080': '0', '\u2081': '1', '\u2082': '2', '\u2083': '3', '\u2084': '4',
+    '\u2085': '5', '\u2086': '6', '\u2087': '7', '\u2088': '8', '\u2089': '9',
+    // Superscripts U+00B2, U+00B3, U+00B9, U+2070, U+2074–U+2079
+    '\u00b2': '2', '\u00b3': '3', '\u00b9': '1', '\u2070': '0',
+    '\u2074': '4', '\u2075': '5', '\u2076': '6', '\u2077': '7', '\u2078': '8', '\u2079': '9',
+    // Dashes
+    '\u2013': '-', '\u2014': '-', '\u2212': '-',
+    // Non-breaking / narrow / thin spaces
+    '\u00a0': ' ', '\u2009': ' ', '\u202f': ' ',
+    // Double quotes (CZ/SK „“, EN “”, guillemets «»)
+    '\u201e': '"', '\u201c': '"', '\u201d': '"', '\u00ab': '"', '\u00bb': '"',
+    // Single quotes / apostrophes
+    '\u2018': "'", '\u2019': "'", '\u2039': "'", '\u203a': "'",
+    // Misc
+    '\u2026': '...',
+    '\u00d7': 'x', '\u00b7': '*'
+  };
+
+  function normaliseForTyping(text: string): string {
+    let out = '';
+    for (const ch of Array.from(text)) {
+      out += ASCII_NORMALISE[ch] ?? ch;
+    }
+    return out;
+  }
+
+  const target = $derived(
+    normaliseForTyping(plan?.sentences[sentenceIndex]?.text ?? '')
+  );
   const targetChars = $derived(Array.from(target)); // codepoints
   const totalSentences = $derived(plan?.sentences.length ?? 0);
 
@@ -140,16 +175,37 @@
   // pass-through too so `řídí` records as one correct keystroke on each
   // character regardless of the input method.
   const DEAD_KEY_CHARS = new Set([
+    // Spacing diacritics that some OS/layouts emit instead of "Dead".
     'ˇ', // caron (háček)
     '´', // acute (čárka)
     '˘', // breve
-    '¨', // diaeresis
+    '¨', // diaeresis / trema
     '˜', // small tilde
     '`', // grave
     '^', // circumflex
-    '˚', // ring above
-    'Unidentified' // some browsers emit this mid-composition
+    '˚', // ring above (kroužek — critical for ů on SK/CZ layouts)
+    '˝', // double acute (SK layout uses this for ő/ű)
+    '¸', // cedilla
+    '˙', // dot above
+    '¯', // macron
+    '΄', // Greek tonos — rare but the acute shares layout space
+    // IME-composition sentinels that different browsers use.
+    'Unidentified',
+    'Process',
+    'Compose'
   ]);
+
+  // Combining diacritical marks: any U+0300–U+036F, U+1AB0–U+1AFF,
+  // U+1DC0–U+1DFF standalone should never count as a real keystroke.
+  function isCombiningMark(key: string): boolean {
+    if (key.length !== 1) return false;
+    const c = key.charCodeAt(0);
+    return (
+      (c >= 0x0300 && c <= 0x036f) ||
+      (c >= 0x1ab0 && c <= 0x1aff) ||
+      (c >= 0x1dc0 && c <= 0x1dff)
+    );
+  }
 
   function handleKey(ev: KeyboardEvent) {
     if (!target) return;
@@ -177,6 +233,11 @@
     // Dead-key pass-through — we wait for the final composed char.
     if (ev.key === 'Dead' || ev.isComposing || ev.keyCode === 229) return;
     if (DEAD_KEY_CHARS.has(ev.key)) return;
+    if (isCombiningMark(ev.key)) return;
+    // AltGraph is separate from `altKey` on several Windows layouts;
+    // many dead-key combos come through AltGr+letter — let the IME
+    // compose and wait for compositionend.
+    if (ev.getModifierState && ev.getModifierState('AltGraph')) return;
 
     // Single-char keys only. Modifier keys like Shift alone produce `.key`
     // with multi-char names (Shift, Control, Meta, ...) and get ignored.

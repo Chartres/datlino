@@ -200,7 +200,7 @@ pub mod candle_backend {
     use candle_core::{DType, Device, Tensor};
     use candle_nn::VarBuilder;
     use candle_transformers::models::bert::{BertModel, Config as BertConfig, HiddenAct};
-    use hf_hub::{api::sync::Api, Repo, RepoType};
+    use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
     const MODEL_ID: &str = "intfloat/multilingual-e5-small";
@@ -223,7 +223,16 @@ pub mod candle_backend {
         /// after the first download.
         pub fn load() -> Result<Self> {
             let device = pick_device();
-            let api = Api::new().map_err(|e| anyhow!("hf-hub: {e}"))?;
+            // Build an explicit ApiBuilder rather than Api::new() —
+            // the latter silently builds with whatever HF_HOME was in
+            // the shell, which on some Tauri-launched processes picks
+            // up a stale value that breaks URL resolution with a
+            // "RelativeUrlWithoutBase". Setting progress on doubles
+            // as a sanity check that the builder succeeded.
+            let api = ApiBuilder::new()
+                .with_progress(true)
+                .build()
+                .map_err(|e| anyhow!("hf-hub builder: {e}"))?;
             let repo = api.repo(Repo::new(MODEL_ID.to_string(), RepoType::Model));
             let config_path = repo.get("config.json").map_err(|e| anyhow!("config: {e}"))?;
             let tokenizer_path = repo

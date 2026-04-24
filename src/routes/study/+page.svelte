@@ -26,6 +26,7 @@
   let alpha = $state(0.7);
   let rephrase = $state(false);
   let anthropicPresent = $state(false);
+  let claudeSubLive = $state(false);
 
   $effect(() => {
     reload();
@@ -33,16 +34,24 @@
 
   async function reload() {
     try {
-      [status, documents, chapters, anthropicPresent] = await Promise.all([
+      const [s, docs, chs, key, sub] = await Promise.all([
         api.indexStatus(),
         api.listDocuments(),
         api.listChapters(),
-        api.anthropicKeyPresent()
+        api.anthropicKeyPresent(),
+        api.claudeSubscriptionStatus()
       ]);
+      status = s;
+      documents = docs;
+      chapters = chs;
+      anthropicPresent = key;
+      claudeSubLive = sub.detected && !sub.expired;
     } catch (e) {
       error = String(e);
     }
   }
+
+  const remixAvailable = $derived(anthropicPresent || claudeSubLive);
 
   const visibleDocs = $derived.by(() => {
     const f = docFilter.toLowerCase().trim();
@@ -120,7 +129,7 @@
         content_strategy: strategy,
         query: strategy !== 'chapter' ? query.trim() || undefined : undefined,
         chapter_id: strategy === 'chapter' && chapterId ? chapterId : undefined,
-        rephrase: rephrase && anthropicPresent,
+        rephrase: rephrase && remixAvailable,
         rephrase_style: rephrase ? 'keystrokes' : undefined,
         language: 'cs'
       });
@@ -265,11 +274,15 @@
           </div>
         {/if}
         <label class="adv-toggle">
-          <input type="checkbox" bind:checked={rephrase} disabled={!anthropicPresent} />
+          <input type="checkbox" bind:checked={rephrase} disabled={!remixAvailable} />
           Remix (LLM přepíše věty s cílem na tvé slabiny) —
-          {anthropicPresent
-            ? 'zapnuto, Anthropic klíč je uložen'
-            : 'nejdřív přihlásit Claude účet v Nastavení'}
+          {#if claudeSubLive}
+            přihlášen přes Claude subscription ✓
+          {:else if anthropicPresent}
+            Anthropic klíč uložen ✓
+          {:else}
+            nejdřív přihlášení v <a href="/settings">Nastavení</a>
+          {/if}
         </label>
       </div>
     </details>

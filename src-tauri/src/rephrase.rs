@@ -32,7 +32,11 @@ use crate::embeddings::{self, EmbeddingProvider};
 
 const KEYCHAIN_SERVICE: &str = "org.datlino.app";
 const KEYCHAIN_ENTRY_ANTHROPIC: &str = "anthropic-api-key";
-const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
+// Sonnet 4.6 trades ~2x cost for noticeably better rewrite quality on
+// factual material. Subscription users don't pay per token, so this is
+// a free upgrade for them; BYOK users can swap back via a future
+// setting.
+const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 const DEFAULT_SIMILARITY_FLOOR: f32 = 0.85;
 
 enum AuthPlan {
