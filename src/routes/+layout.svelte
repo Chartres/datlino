@@ -25,8 +25,11 @@
   <header>
     <div class="brand">
       <a href="/">
-        <h1>Datlino</h1>
-        <p class="tagline">Piš to, co se učíš.</p>
+        <img src="/datlino-logo.svg" alt="" aria-hidden="true" class="logo" />
+        <div>
+          <h1>Datlino</h1>
+          <p class="tagline">Piš to, co se učíš.</p>
+        </div>
       </a>
     </div>
     <nav>
@@ -78,6 +81,14 @@
   .brand a {
     text-decoration: none;
     color: inherit;
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+  }
+  .brand .logo {
+    width: 40px;
+    height: 46px;
+    flex-shrink: 0;
   }
 
   h1 {

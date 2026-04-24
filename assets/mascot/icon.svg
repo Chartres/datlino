@@ -1,0 +1,80 @@
+<!-- Datlino — Integrated app icon.
+     Concept: a mechanical keycap + open book + woodpecker crest pecking
+     from top-right. Reads as "study → keys → bird" in one glance.
+     Palette: deep-red field, cream book pages, charcoal text lines.
+     Designed square for iOS/macOS/Android/Windows icon generation. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Datlino app icon">
+  <!-- Rounded red field -->
+  <rect x="0" y="0" width="512" height="512" rx="112" ry="112" fill="#b3271f"/>
+
+  <!-- Subtle inner shadow for depth -->
+  <rect x="0" y="0" width="512" height="512" rx="112" ry="112"
+        fill="none" stroke="#292524" stroke-opacity="0.08" stroke-width="6"/>
+
+  <!-- Book — open, facing viewer. Two cream pages, a thin spine. -->
+  <g transform="translate(96 144)">
+    <!-- Page shadow -->
+    <path d="M0 24 L160 8 L160 192 L0 208 Z M160 8 L320 24 L320 208 L160 192 Z"
+          fill="#000" opacity="0.15"/>
+    <!-- Left page -->
+    <path d="M8 36 L156 20 L156 196 L8 212 Z" fill="#f7f3ec"/>
+    <!-- Right page -->
+    <path d="M164 20 L312 36 L312 212 L164 196 Z" fill="#f7f3ec"/>
+    <!-- Spine -->
+    <rect x="156" y="18" width="8" height="180" fill="#dcd3c1"/>
+
+    <!-- Left-page text lines -->
+    <g fill="#292524">
+      <rect x="24" y="54" width="116" height="6" rx="2"/>
+      <rect x="24" y="74" width="104" height="6" rx="2"/>
+      <rect x="24" y="94" width="112" height="6" rx="2"/>
+      <rect x="24" y="114" width="92" height="6" rx="2"/>
+      <rect x="24" y="134" width="108" height="6" rx="2"/>
+      <rect x="24" y="154" width="100" height="6" rx="2"/>
+      <rect x="24" y="174" width="88" height="6" rx="2"/>
+    </g>
+    <!-- Right-page text lines -->
+    <g fill="#292524">
+      <rect x="180" y="56" width="112" height="6" rx="2"/>
+      <rect x="180" y="76" width="96" height="6" rx="2"/>
+      <rect x="180" y="96" width="108" height="6" rx="2"/>
+      <rect x="180" y="116" width="116" height="6" rx="2"/>
+      <rect x="180" y="136" width="88" height="6" rx="2"/>
+      <rect x="180" y="156" width="104" height="6" rx="2"/>
+      <rect x="180" y="176" width="100" height="6" rx="2"/>
+    </g>
+  </g>
+
+  <!-- Woodpecker perched on the book's top edge, pecking down. -->
+  <g transform="translate(296 72)">
+    <!-- Body (cream against red field for contrast) -->
+    <path d="M24 12
+             C 22 6, 30 0, 46 2
+             C 64 4, 78 14, 84 28
+             L 86 58
+             C 86 68, 80 76, 70 80
+             L 48 86
+             L 44 98
+             L 36 98
+             L 34 86
+             C 22 82, 18 74, 18 60 Z"
+          fill="#f7f3ec"/>
+    <!-- Red crest stripe -->
+    <path d="M34 4
+             C 40 0, 52 0, 60 4
+             L 60 16
+             L 34 16 Z"
+          fill="#b3271f" stroke="#f7f3ec" stroke-width="1"/>
+    <!-- Wing feathers hinted with parallel lines -->
+    <g stroke="#292524" stroke-width="1.2" stroke-linecap="round" fill="none" opacity="0.55">
+      <path d="M46 36 L68 40"/>
+      <path d="M44 46 L66 50"/>
+      <path d="M42 56 L62 60"/>
+      <path d="M42 66 L58 70"/>
+    </g>
+    <!-- Eye -->
+    <circle cx="56" cy="14" r="2.6" fill="#292524"/>
+    <!-- Beak — chisel-shaped, pointing down into the book -->
+    <path d="M18 28 L6 42 L18 40 Z" fill="#292524"/>
+  </g>
+</svg>
