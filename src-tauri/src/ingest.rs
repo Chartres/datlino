@@ -1,12 +1,18 @@
-//! Folder ingestion for `.md` and `.txt` files.
+//! Folder ingestion for `.md`, `.txt`, and text-layer PDF.
 //!
 //! Walks a directory tree, reads each supported file, segments it via the
 //! CZ/SK-aware `segmenter`, and upserts the document + its chunks into
 //! SQLite. Re-ingesting the same path is cheap when the file's checksum is
 //! unchanged.
+//!
+//! When given a `ProgressReporter`, emits incremental updates per file so
+//! the UI can render a progress bar (files_seen, files_ingested,
+//! files_skipped_unchanged, chunks_written). Useful on large libraries
+//! where the blocking call can otherwise look like a freeze.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,12 +51,27 @@ impl DocKind {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct IngestStats {
     pub files_seen: usize,
     pub files_ingested: usize,
     pub files_skipped_unchanged: usize,
     pub chunks_written: usize,
+}
+
+/// Trait so `ingest_tree` can stream progress without the module caring
+/// whether the sink is a Tauri event bus, a test spy, or `()`.
+pub trait ProgressReporter {
+    fn on_file_start(&self, path: &Path);
+    fn on_file_done(&self, path: &Path, stats: IngestStats);
+    fn on_tree_done(&self, stats: IngestStats);
+}
+
+pub struct NoProgress;
+impl ProgressReporter for NoProgress {
+    fn on_file_start(&self, _path: &Path) {}
+    fn on_file_done(&self, _path: &Path, _stats: IngestStats) {}
+    fn on_tree_done(&self, _stats: IngestStats) {}
 }
 
 /// Ingest a single file. Returns true if the document was (re-)indexed.
@@ -121,17 +142,35 @@ pub fn ingest_file(conn: &mut Connection, path: &Path) -> Result<bool> {
 
 /// Recursively ingest every supported file under `root`.
 pub fn ingest_tree(conn: &mut Connection, root: &Path) -> Result<IngestStats> {
+    ingest_tree_with_progress(conn, root, &NoProgress)
+}
+
+/// Progress-reporting variant. Callers that want to show a UI bar pass
+/// a `ProgressReporter` that emits Tauri events (or logs, or nothing).
+pub fn ingest_tree_with_progress(
+    conn: &mut Connection,
+    root: &Path,
+    progress: &dyn ProgressReporter,
+) -> Result<IngestStats> {
     let mut stats = IngestStats::default();
-    walk(conn, root, &mut stats)?;
+    walk(conn, root, &mut stats, progress)?;
+    progress.on_tree_done(stats);
     Ok(stats)
 }
 
-fn walk(conn: &mut Connection, dir: &Path, stats: &mut IngestStats) -> Result<()> {
+fn walk(
+    conn: &mut Connection,
+    dir: &Path,
+    stats: &mut IngestStats,
+    progress: &dyn ProgressReporter,
+) -> Result<()> {
     if !dir.is_dir() {
         // single-file root: still try
         if DocKind::from_path(dir).is_some() {
             stats.files_seen += 1;
+            progress.on_file_start(dir);
             ingest_one_with_stats(conn, dir, stats)?;
+            progress.on_file_done(dir, *stats);
         }
         return Ok(());
     }
@@ -150,10 +189,12 @@ fn walk(conn: &mut Connection, dir: &Path, stats: &mut IngestStats) -> Result<()
             {
                 continue;
             }
-            walk(conn, &path, stats)?;
+            walk(conn, &path, stats, progress)?;
         } else if DocKind::from_path(&path).is_some() {
             stats.files_seen += 1;
+            progress.on_file_start(&path);
             ingest_one_with_stats(conn, &path, stats)?;
+            progress.on_file_done(&path, *stats);
         }
     }
     Ok(())

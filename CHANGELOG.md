@@ -8,6 +8,36 @@ Dates use the commit day. The `[ref]` handles point at backlog items in
 
 ## Unreleased
 
+**Top-4 voted features: ingest progress, exam ramps, installers, iPad
+scaffold + market positioning.** `[ING-009 PE-012 DIS-001 PLT-001 RES-004]`
+
+- **Ingest progress events.** Adding a folder no longer looks like a
+  freeze on large libraries — Lucie's 200-doc thesis case. Rust
+  emits `ingest-progress` events per file; `/study` shows a live
+  progress bar with file count, chunk count, and the current path.
+- **Cermat / maturita exam ramps.** Five curated content packs ship
+  in the box: Cermat ČJL, Cermat M, Maturita ČJL, Maturita English,
+  Maturita Math. Each ramp has 2-4 lessons of CC-BY-licensable
+  paraphrased passages with citations. Pick a single lesson or
+  drill the whole ramp from `/study`.
+- **DIS-001 installer pipeline.** GitHub Actions workflow at
+  `.github/workflows/release.yml` builds per-platform artefacts
+  (macOS arm + Intel `.dmg`, Linux `.AppImage` + `.deb`, Windows
+  `.msi` + `.exe`). Signing + notarization slots in once you wire
+  the Apple + Windows code-signing secrets — full guide at
+  `docs/SIGNING.md`. Builds run unsigned out of the box for
+  internal dogfooding.
+- **PLT-001 iPad scaffold.** `docs/IPAD.md` documents the
+  `tauri ios init` path, what works today (Rust core, SvelteKit
+  bundle, schema), what needs adapting (touch-friendly spacing,
+  GoodNotes Share Sheet), and what's gated (Candle iOS path,
+  Apple Vision OCR replacement for Tesseract). Real Xcode session
+  on a Mac is the next-physical-thing-needed.
+- **Market scan + positioning memo.** `research/market/market-scan.md`
+  + `research/market/positioning.md`. Where Datlino fits between
+  typing tutors and study apps; what kills these products; CZ/SK
+  pricing and TAM; concrete risks of the overlap position.
+
 **Pedagogy depth: FSRS + Cloze + Calibration + Metacognition.** `[PE-002 PE-003 PE-005 PE-006]`
 
 - **FSRS** (Free Spaced Repetition Scheduler) now runs on your content

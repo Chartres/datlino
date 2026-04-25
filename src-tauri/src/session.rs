@@ -47,6 +47,11 @@ pub enum PracticeMode {
     /// keystroke target still has it. Biggest leverage in the
     /// "learning how to learn" literature after spaced repetition.
     Cloze,
+    /// Curated exam-prep curriculum ramp (Cermat / maturita).
+    /// Passages come from `curriculum::all_ramps()`; each ramp has a
+    /// stable id. Student types pre-built, CC-BY-licensable content
+    /// tailored to a specific exam.
+    ExamRamp,
 }
 
 impl PracticeMode {
@@ -59,6 +64,7 @@ impl PracticeMode {
             PracticeMode::Hybrid => "hybrid",
             PracticeMode::IntroLesson => "intro_lesson",
             PracticeMode::Cloze => "cloze",
+            PracticeMode::ExamRamp => "exam_ramp",
         }
     }
 }
@@ -124,6 +130,13 @@ pub struct SessionRequest {
     /// hidden on the typing surface; kept in `text` so keystrokes match.
     #[serde(default)]
     pub cloze_index: Option<usize>,
+    /// `curriculum::all_ramps()` id when `mode == ExamRamp`.
+    #[serde(default)]
+    pub ramp_id: Option<String>,
+    /// Optional single-lesson pick inside a ramp. If None, every lesson
+    /// in the ramp becomes a session.
+    #[serde(default)]
+    pub ramp_lesson_id: Option<String>,
 }
 
 impl Default for SessionRequest {
@@ -142,6 +155,8 @@ impl Default for SessionRequest {
             lesson_id: None,
             document_id: None,
             cloze_index: None,
+            ramp_id: None,
+            ramp_lesson_id: None,
         }
     }
 }
@@ -208,6 +223,7 @@ pub fn create_session(
         PracticeMode::Hybrid => pick_hybrid(conn, user_id, req)?,
         PracticeMode::IntroLesson => pick_intro_lesson(conn, user_id, req)?,
         PracticeMode::Cloze => pick_cloze(conn, user_id, req)?,
+        PracticeMode::ExamRamp => pick_exam_ramp(req)?,
     };
 
     // Optional rephrase pass — only for Content mode with backing chunks.
@@ -970,6 +986,40 @@ fn attach_cloze(mut s: SessionSentence) -> Option<SessionSentence> {
     Some(s)
 }
 
+/// **ExamRamp** mode — emit every passage in the requested curriculum
+/// ramp as a generated session sentence. When `ramp_lesson_id` is
+/// specified, only that lesson's passages are used; otherwise the full
+/// ramp is concatenated in order.
+fn pick_exam_ramp(req: &SessionRequest) -> Result<Vec<SessionSentence>> {
+    let Some(ramp_id) = req.ramp_id.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let Some(ramp) = crate::curriculum::ramp_by_id(ramp_id) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for lesson in &ramp.lessons {
+        if let Some(want) = req.ramp_lesson_id.as_deref() {
+            if lesson.id != want {
+                continue;
+            }
+        }
+        for passage in &lesson.passages {
+            out.push(SessionSentence {
+                chunk_id: None,
+                text: passage.to_string(),
+                source_path: Some(format!("exam://{}/{}", ramp.id, lesson.id)),
+                is_generated: true,
+                source_text: None,
+                rephrased_id: None,
+                similarity: None,
+                cloze_span: None,
+            });
+        }
+    }
+    Ok(out)
+}
+
 fn parse_chapter_id(s: &str) -> Option<(i64, String)> {
     let (doc_str, section) = s.split_once("::")?;
     let doc_id: i64 = doc_str.parse().ok()?;
@@ -1498,6 +1548,8 @@ mod tests {
             lesson_id: None,
             document_id: None,
             cloze_index: None,
+            ramp_id: None,
+            ramp_lesson_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1522,6 +1574,8 @@ mod tests {
             lesson_id: None,
             document_id: None,
             cloze_index: None,
+            ramp_id: None,
+            ramp_lesson_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1546,6 +1600,8 @@ mod tests {
             lesson_id: None,
             document_id: None,
             cloze_index: None,
+            ramp_id: None,
+            ramp_lesson_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1579,6 +1635,8 @@ mod tests {
             lesson_id: None,
             document_id: None,
             cloze_index: None,
+            ramp_id: None,
+            ramp_lesson_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         let sources: std::collections::HashSet<_> = plan
@@ -1624,6 +1682,8 @@ mod tests {
             lesson_id: None,
             document_id: None,
             cloze_index: None,
+            ramp_id: None,
+            ramp_lesson_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert_eq!(
@@ -1664,6 +1724,8 @@ mod tests {
             lesson_id: None,
             document_id: None,
             cloze_index: None,
+            ramp_id: None,
+            ramp_lesson_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1703,6 +1765,8 @@ mod tests {
             lesson_id: None,
             document_id: None,
             cloze_index: None,
+            ramp_id: None,
+            ramp_lesson_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         assert!(!plan.sentences.is_empty());
@@ -1725,6 +1789,8 @@ mod tests {
             lesson_id: None,
             document_id: None,
             cloze_index: None,
+            ramp_id: None,
+            ramp_lesson_id: None,
         };
         let plan = create_session(&mut conn, 1, &req).unwrap();
         let n: i64 = conn

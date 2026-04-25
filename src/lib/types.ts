@@ -5,7 +5,21 @@ export type PracticeMode =
   | 'weak_keys'
   | 'hybrid'
   | 'intro_lesson'
-  | 'cloze';
+  | 'cloze'
+  | 'exam_ramp';
+
+export type ExamRamp = {
+  id: string;
+  kind: string;
+  title: string;
+  subtitle: string;
+  lessons: {
+    id: string;
+    title: string;
+    passages: string[];
+    citation: string;
+  }[];
+};
 
 export type LessonListItem = {
   id: string;
@@ -37,6 +51,8 @@ export type SessionRequest = {
   language?: string;
   lesson_id?: string;
   document_id?: number;
+  ramp_id?: string;
+  ramp_lesson_id?: string;
 };
 
 export type DocumentInfo = {

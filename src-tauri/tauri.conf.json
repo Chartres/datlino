@@ -34,6 +34,18 @@
       "icons/128x128@2x.png"
     ],
     "shortDescription": "Touch-typing trainer for Czech and Slovak high school students.",
-    "longDescription": "Datlino drills students on the actual content they are studying — type the phrases from your own textbooks, notes, and GoodNotes exports while building real WPM and accuracy."
+    "longDescription": "Datlino drills students on the actual content they are studying — type the phrases from your own textbooks, notes, and GoodNotes exports while building real WPM and accuracy.",
+    "category": "Education",
+    "copyright": "© 2026 Paja Dravec",
+    "publisher": "Paja Dravec",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "entitlements": null
+    },
+    "windows": {
+      "wix": {
+        "language": ["en-US", "cs-CZ"]
+      }
+    }
   }
 }

@@ -4,6 +4,7 @@
 //! the runtime modules. `main.rs` is a thin shim that calls `run()`.
 
 pub mod claude_auth;
+pub mod curriculum;
 pub mod db;
 pub mod embeddings;
 pub mod fsrs;
@@ -23,7 +24,8 @@ use rusqlite::Connection;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use std::time::Duration;
+use tauri::{Emitter, Manager, State};
 
 /// Single-user install for MVP — every command uses user_id = 1.
 const DEFAULT_USER_ID: i64 = 1;
@@ -305,6 +307,11 @@ fn list_intro_lessons(
 }
 
 #[tauri::command]
+fn list_exam_ramps() -> std::result::Result<Vec<curriculum::ExamRamp>, String> {
+    Ok(curriculum::all_ramps())
+}
+
+#[tauri::command]
 fn list_documents(
     state: State<'_, AppState>,
 ) -> std::result::Result<Vec<session::DocumentInfo>, String> {
@@ -439,6 +446,22 @@ pub fn run() {
                 }
             }
 
+            // Drain ingest events off the watcher channel and re-emit
+            // them as Tauri events the frontend can subscribe to. Runs
+            // on its own thread so the watcher never blocks on the UI.
+            if let Some(rx) = watcher.ingest_events.lock().unwrap().take() {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    match rx.recv_timeout(Duration::from_secs(3600)) {
+                        Ok(ev) => {
+                            let _ = app_handle.emit("ingest-progress", ev);
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(_) => break, // channel closed
+                    }
+                });
+            }
+
             app.manage(AppState {
                 conn: Mutex::new(ui_conn),
                 watcher,
@@ -466,6 +489,7 @@ pub fn run() {
             detect_anthropic_env_key,
             claude_subscription_status,
             list_intro_lessons,
+            list_exam_ramps,
             list_documents,
             ingest_single_file,
             record_calibration_prediction,

@@ -250,6 +250,26 @@ export async function installMockTauri(page: Page, corpus: MockCorpus) {
         case 'list_chapters':
           return [];
 
+        case 'list_exam_ramps':
+          // Two minimal ramps so the /study page can render the section
+          // without exploding. Real content is in the Rust binary.
+          return [
+            {
+              id: 'cermat_cjl',
+              kind: 'cermat_czech_language',
+              title: 'Cermat · ČJL',
+              subtitle: 'Mock ramp pro test',
+              lessons: [
+                {
+                  id: 'mock_lesson',
+                  title: 'Mock lesson',
+                  passages: ['Mock věta jedna.', 'Mock věta dvě.'],
+                  citation: 'Mock'
+                }
+              ]
+            }
+          ];
+
         case 'list_intro_lessons': {
           const passed = new Set(state.lessonsPassed);
           let prevPassed = true;

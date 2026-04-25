@@ -1,13 +1,51 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { api } from '$lib/api';
   import { currentSession } from '$lib/session-store.svelte';
   import type {
     ChapterInfo,
     ContentStrategy,
     DocumentInfo,
+    ExamRamp,
     IndexStatus
   } from '$lib/types';
+
+  type IngestEvent =
+    | { kind: 'start'; path: string }
+    | {
+        kind: 'file';
+        path: string;
+        stats: {
+          files_seen: number;
+          files_ingested: number;
+          files_skipped_unchanged: number;
+          chunks_written: number;
+        };
+      }
+    | {
+        kind: 'done';
+        stats: {
+          files_seen: number;
+          files_ingested: number;
+          files_skipped_unchanged: number;
+          chunks_written: number;
+        };
+      };
+
+  let ingestProgress = $state<{
+    active: boolean;
+    currentPath: string;
+    filesDone: number;
+    filesSeen: number;
+    chunks: number;
+  }>({
+    active: false,
+    currentPath: '',
+    filesDone: 0,
+    filesSeen: 0,
+    chunks: 0
+  });
 
   type Strategy = ContentStrategy;
 
@@ -27,27 +65,84 @@
   let rephrase = $state(false);
   let anthropicPresent = $state(false);
   let claudeSubLive = $state(false);
+  let examRamps = $state<ExamRamp[]>([]);
 
   $effect(() => {
     reload();
+    // Subscribe to Rust-side ingest progress. Returns an unlisten.
+    let unlisten: UnlistenFn | null = null;
+    listen<IngestEvent>('ingest-progress', async (ev) => {
+      const payload = ev.payload;
+      if (payload.kind === 'start') {
+        ingestProgress = {
+          active: true,
+          currentPath: payload.path,
+          filesDone: ingestProgress.filesDone,
+          filesSeen: ingestProgress.filesSeen + 1,
+          chunks: ingestProgress.chunks
+        };
+      } else if (payload.kind === 'file') {
+        ingestProgress = {
+          active: true,
+          currentPath: payload.path,
+          filesDone:
+            payload.stats.files_ingested + payload.stats.files_skipped_unchanged,
+          filesSeen: payload.stats.files_seen,
+          chunks: payload.stats.chunks_written
+        };
+      } else if (payload.kind === 'done') {
+        ingestProgress = { ...ingestProgress, active: false };
+        await reload(); // refresh the document list
+      }
+    }).then((u) => (unlisten = u));
+    return () => {
+      unlisten?.();
+    };
   });
 
   async function reload() {
     try {
-      const [s, docs, chs, key, sub] = await Promise.all([
+      const [s, docs, chs, key, sub, ramps] = await Promise.all([
         api.indexStatus(),
         api.listDocuments(),
         api.listChapters(),
         api.anthropicKeyPresent(),
-        api.claudeSubscriptionStatus()
+        api.claudeSubscriptionStatus(),
+        api.listExamRamps()
       ]);
       status = s;
       documents = docs;
       chapters = chs;
       anthropicPresent = key;
       claudeSubLive = sub.detected && !sub.expired;
+      examRamps = ramps;
     } catch (e) {
       error = String(e);
+    }
+  }
+
+  async function startRamp(rampId: string, lessonId?: string) {
+    busy = true;
+    error = null;
+    try {
+      const plan = await api.createSession({
+        mode: 'exam_ramp',
+        alpha: 0,
+        target_duration_s: 600,
+        ramp_id: rampId,
+        ramp_lesson_id: lessonId
+      });
+      if (!plan.sentences.length) {
+        error = 'Ramp je prázdný.';
+        return;
+      }
+      currentSession.plan = plan;
+      currentSession.summary = null;
+      await goto('/practice/session');
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
     }
   }
 
@@ -170,6 +265,70 @@
 
 {#if error}
   <p class="error">{error}</p>
+{/if}
+
+{#if ingestProgress.active}
+  <section class="ingest-bar" aria-live="polite">
+    <div class="ingest-bar-row">
+      <strong>Načítám tvou knihovnu…</strong>
+      <span>{ingestProgress.filesDone} / {ingestProgress.filesSeen} souborů · {ingestProgress.chunks} vět</span>
+    </div>
+    <div class="ingest-track">
+      <div
+        class="ingest-fill"
+        style={`width: ${
+          ingestProgress.filesSeen === 0
+            ? 5
+            : Math.min(100, (ingestProgress.filesDone / ingestProgress.filesSeen) * 100)
+        }%`}
+      ></div>
+    </div>
+    <p class="ingest-path">{ingestProgress.currentPath.split(/[\\/]/).pop() ?? ''}</p>
+  </section>
+{/if}
+
+{#if examRamps.length > 0}
+  <section class="ramps">
+    <h3 class="section-head">Příprava na zkoušku — ramps</h3>
+    <p class="muted small">
+      Připravené sady pro Cermat a maturitu. Žádná potřeba vlastních
+      materiálů — Datlino si text hlídá za tebe.
+    </p>
+    <div class="ramps-grid">
+      {#each examRamps as ramp (ramp.id)}
+        <article class="ramp-card">
+          <h4>{ramp.title}</h4>
+          <p class="ramp-sub">{ramp.subtitle}</p>
+          <ul class="ramp-lessons">
+            {#each ramp.lessons as lesson (lesson.id)}
+              <li>
+                <span class="ramp-lesson-title">{lesson.title}</span>
+                <span class="ramp-lesson-count">
+                  {lesson.passages.length} vět
+                </span>
+                <button
+                  type="button"
+                  class="ramp-go"
+                  onclick={() => startRamp(ramp.id, lesson.id)}
+                  disabled={busy}
+                >
+                  Začít
+                </button>
+              </li>
+            {/each}
+          </ul>
+          <button
+            type="button"
+            class="ramp-all"
+            onclick={() => startRamp(ramp.id)}
+            disabled={busy}
+          >
+            Trénovat celý ramp →
+          </button>
+        </article>
+      {/each}
+    </div>
+  </section>
 {/if}
 
 {#if documents.length === 0}
@@ -502,5 +661,90 @@
     background: rgba(28, 25, 23, 0.05);
     padding: 0.05rem 0.3rem;
     border-radius: 3px;
+  }
+  .ingest-bar {
+    padding: 0.75rem 1rem;
+    background: rgba(179, 39, 31, 0.05);
+    border: 1px solid rgba(179, 39, 31, 0.2);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+  }
+  .ingest-bar-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    color: #292524;
+    margin-bottom: 0.4rem;
+  }
+  .ingest-track {
+    height: 4px;
+    background: rgba(28, 25, 23, 0.08);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .ingest-fill {
+    height: 100%;
+    background: #b3271f;
+    transition: width 250ms ease;
+  }
+  .ingest-path {
+    margin: 0.3rem 0 0;
+    color: #78716c;
+    font-size: 0.75rem;
+    font-family: ui-monospace, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ramps { margin-bottom: 2rem; }
+  .ramps-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 0.6rem;
+    margin-top: 0.75rem;
+  }
+  .ramp-card {
+    padding: 0.9rem 1rem;
+    background: #fffaf2;
+    border: 1px solid rgba(28, 25, 23, 0.08);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .ramp-card h4 { margin: 0; font-size: 0.98rem; color: #b3271f; }
+  .ramp-sub { margin: 0; font-size: 0.82rem; color: #57534e; }
+  .ramp-lessons { list-style: none; padding: 0; margin: 0.4rem 0; }
+  .ramp-lessons li {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 0.5rem;
+    align-items: center;
+    padding: 0.35rem 0.1rem;
+    border-top: 1px dashed rgba(28, 25, 23, 0.08);
+    font-size: 0.85rem;
+  }
+  .ramp-lessons li:first-child { border-top: 0; }
+  .ramp-lesson-title { color: #292524; }
+  .ramp-lesson-count { color: #78716c; font-size: 0.75rem; }
+  .ramp-go, .ramp-all {
+    padding: 0.3rem 0.7rem;
+    border: 1px solid rgba(28, 25, 23, 0.2);
+    background: transparent;
+    color: #44403c;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.78rem;
+  }
+  .ramp-all {
+    margin-top: 0.4rem;
+    align-self: flex-start;
+    border-color: #b3271f;
+    color: #b3271f;
+    font-weight: 600;
   }
 </style>

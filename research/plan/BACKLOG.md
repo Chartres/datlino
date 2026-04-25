@@ -57,7 +57,7 @@
 | PE-009 | Pomodoro break suggestion mid-session | backlog | — |
 | PE-010 | Sleep reminder for late-night cramming (>23:00) | backlog | — |
 | PE-011 | Forest progress visualization (mastered chunks grow branches) | backlog | — |
-| PE-012 | Exam-mode curated ramps for Cermat / maturita | backlog | — |
+| PE-012 | Exam-mode curated ramps for Cermat / maturita | shipped | 5318b34 |
 | PE-013 | Auto-regression alerts ("tenhle bigram se ti zhoršuje 2 týdny") | backlog | — |
 | PE-014 | "Explain back" drill — student types one-sentence summary post-session | backlog | — |
 | AI-001 | Claude subscription auth (use Pro/Max quota via Claude Code creds) | shipped | 1244b02 |
@@ -75,7 +75,7 @@
 | ING-006 | Tesseract + pdftoppm OCR dispatch | shipped | 7025cc7 |
 | ING-007 | Apple Vision OCR path on macOS (native) | backlog | — |
 | ING-008 | "Zkontrolovat znovu" OCR button after user installs deps | shipped | 1244b02 |
-| ING-009 | Ingest progress events (files, chunks, embeddings) streamed to UI | backlog | — |
+| ING-009 | Ingest progress events (files, chunks, embeddings) streamed to UI | shipped | 5318b34 |
 | UX-001 | Lesson target phrased in human-readable language, not raw WPM | planned | — |
 | UX-002 | Candle silent-switch fixed (progress or no-op message) | planned | — |
 | UX-003 | Colorblind-safe finger palette toggle | backlog | — |
@@ -84,16 +84,17 @@
 | UX-006 | Audio cue on error (optional) | backlog | — |
 | UX-007 | Offline / online state banner in Nastavení | backlog | — |
 | UX-008 | "What's new" modal on first launch after update | backlog | — |
-| DIS-001 | Notarized `.dmg` + signed `.msi` + `.AppImage` bundles | backlog | — |
+| DIS-001 | Notarized `.dmg` + signed `.msi` + `.AppImage` bundles | shipping | 5318b34 (CI scaffolded; signing certs pending) |
 | DIS-002 | Tauri auto-updater via GitHub Releases | backlog | — |
 | DIS-003 | Classroom / parent-lite aggregate progress view | backlog | — |
 | DIS-004 | Licensing / pricing scaffolding | backlog | — |
-| PLT-001 | iPad version (GoodNotes lives there) | backlog | — |
+| PLT-001 | iPad version (GoodNotes lives there) | shipping | 5318b34 (scaffold + docs; needs Xcode session on Mac) |
 | PLT-002 | Touch-keyboard handling | backlog | — |
 | PLT-003 | Larger-type "junior" mode | backlog | — |
 | RES-001 | Persona vote mechanism (advisory) | shipped | this commit |
 | RES-002 | CHANGELOG.md + /about in-app renderer | shipped | this commit |
 | RES-003 | Living backlog kept in sync with every push | shipped | this commit |
+| RES-004 | Market scan + positioning memo | shipped | 5318b34 |
 
 ## Persona votes
 

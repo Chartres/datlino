@@ -8,6 +8,7 @@ import type {
   EmbedProgress,
   EmbeddingProviderKind,
   EmbeddingStatus,
+  ExamRamp,
   IndexStatus,
   LessonListItem,
   SearchHit,
@@ -66,6 +67,7 @@ export const api = {
 
   // intro lessons
   listIntroLessons: () => invoke<LessonListItem[]>('list_intro_lessons'),
+  listExamRamps: () => invoke<ExamRamp[]>('list_exam_ramps'),
 
   // about + changelog
   getChangelog: () => invoke<string>('get_changelog'),

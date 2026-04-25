@@ -1,5 +1,5 @@
 
-## Session 2026-04-24T06:39:04.497Z
+## Session 2026-04-25T11:05:41.771Z
 
 > Moje poznámky jsou PDF z GoodNotes. Obrázky rukopisu.
 
@@ -7,7 +7,7 @@
 - **[install-hint]** _(delight)_ Vidím brew příkaz — Tereza skopíruje.
 - **[recheck-button]** _(delight)_ "Zkontrolovat znovu" tlačítko existuje. Po `brew install` stisknu a UI se obnoví. C6 resolved.
 
-## Session 2026-04-24T06:39:04.886Z
+## Session 2026-04-25T11:05:42.193Z
 
 > Moje poznámky jsou PDF z GoodNotes. Obrázky rukopisu.
 

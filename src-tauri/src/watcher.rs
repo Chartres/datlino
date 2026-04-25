@@ -17,8 +17,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::ingest;
+use crate::ingest::{self, IngestStats, ProgressReporter};
 use rusqlite::Connection;
+use serde::Serialize;
 
 pub enum WatchCommand {
     AddRoot(PathBuf),
@@ -26,9 +27,44 @@ pub enum WatchCommand {
     Shutdown,
 }
 
+/// Progress reporter that dispatches Tauri events. The UI listens for
+/// `datlino://ingest_progress` and re-renders the library with live
+/// counts.
+pub struct TauriProgress {
+    pub tx: Sender<IngestEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IngestEvent {
+    Start { path: String },
+    File { path: String, stats: IngestStats },
+    Done { stats: IngestStats },
+}
+
+impl ProgressReporter for TauriProgress {
+    fn on_file_start(&self, path: &Path) {
+        let _ = self.tx.send(IngestEvent::Start {
+            path: path.to_string_lossy().to_string(),
+        });
+    }
+    fn on_file_done(&self, path: &Path, stats: IngestStats) {
+        let _ = self.tx.send(IngestEvent::File {
+            path: path.to_string_lossy().to_string(),
+            stats,
+        });
+    }
+    fn on_tree_done(&self, stats: IngestStats) {
+        let _ = self.tx.send(IngestEvent::Done { stats });
+    }
+}
+
 pub struct WatcherHandle {
     tx: Sender<WatchCommand>,
     roots: Arc<Mutex<Vec<PathBuf>>>,
+    pub ingest_events: Arc<Mutex<Option<Receiver<IngestEvent>>>>,
+    #[allow(dead_code)]
+    ingest_tx: Sender<IngestEvent>,
 }
 
 impl WatcherHandle {
@@ -55,6 +91,8 @@ pub fn spawn(mut conn: Connection) -> WatcherHandle {
     let (cmd_tx, cmd_rx): (Sender<WatchCommand>, Receiver<WatchCommand>) = channel();
     let (event_tx, event_rx) =
         channel::<std::result::Result<notify::Event, notify::Error>>();
+    let (ingest_tx, ingest_rx) = channel::<IngestEvent>();
+    let progress_tx = ingest_tx.clone();
     let roots = Arc::new(Mutex::new(Vec::<PathBuf>::new()));
     let roots_for_thread = roots.clone();
 
@@ -87,8 +125,12 @@ pub fn spawn(mut conn: Connection) -> WatcherHandle {
                                 eprintln!("[datlino] watch({}) failed: {e}", p.display());
                                 continue;
                             }
-                            // Initial bulk ingest of this root.
-                            if let Err(e) = ingest::ingest_tree(&mut conn, &p) {
+                            // Initial bulk ingest of this root — streams
+                            // progress back to the UI via ingest events.
+                            let reporter = TauriProgress {
+                                tx: progress_tx.clone(),
+                            };
+                            if let Err(e) = ingest::ingest_tree_with_progress(&mut conn, &p, &reporter) {
                                 eprintln!("[datlino] initial ingest of {} failed: {e}", p.display());
                             }
                             watched.insert(p.clone(), ());
@@ -116,7 +158,12 @@ pub fn spawn(mut conn: Connection) -> WatcherHandle {
         })
         .expect("spawn watcher thread");
 
-    WatcherHandle { tx: cmd_tx, roots }
+    WatcherHandle {
+        tx: cmd_tx,
+        roots,
+        ingest_events: Arc::new(Mutex::new(Some(ingest_rx))),
+        ingest_tx,
+    }
 }
 
 fn handle_event(conn: &mut Connection, event: notify::Event) {
