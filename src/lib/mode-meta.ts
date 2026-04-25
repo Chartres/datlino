@@ -60,6 +60,14 @@ export const modes: ModeMeta[] = [
     principle: 'Student-led — posuvníkem si sám určíš poměr.',
     supportsAlpha: true,
     supportsQuery: true
+  },
+  {
+    code: 'dictation',
+    title: 'Diktát',
+    subtitle: 'Datlino čte věty nahlas, ty je píšeš. Pauzuje, když nestíháš.',
+    principle: 'Multimodality — sluch + svaly + vizuální stopa zároveň.',
+    supportsAlpha: false,
+    supportsQuery: true
   }
 ];
 

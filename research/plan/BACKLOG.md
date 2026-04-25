@@ -49,7 +49,7 @@
 | PE-001 | Weak-ngram learning-zone signal (not just the broken ones) | shipped | 000c1ad |
 | PE-002 | FSRS scheduler on content chunks | shipped | b2e4332 |
 | PE-003 | Cloze drills (delete a word, type to fill) | shipped | b2e4332 |
-| PE-004 | Dictation mode (browser TTS reads; student types) | planned | — |
+| PE-004 | Dictation mode (browser TTS reads; student types) | shipped | dAVde |
 | PE-005 | Pre-session calibration ("kolik % napíšeš správně?") | shipped | b2e4332 |
 | PE-006 | Post-session metacognitive summary ("co se ti lepší, co horší, co dál") | shipped | b2e4332 |
 | PE-007 | Desirable-difficulty toggles (hide keyboard, reduce lookahead, second-pass memory) | planned | — |
@@ -67,6 +67,7 @@
 | AI-005 | Background re-embedding (non-blocking) | backlog | — |
 | AI-006 | Hybrid BM25 + cosine re-rank via RRF | backlog | — |
 | AI-007 | Larger e5 model (multilingual-e5-large, 400 MB) option | backlog | — |
+| AI-008 | Copy-paste remix (deterministic prompt → free LLM → JSON paste back) | shipped | dAVde |
 | ING-001 | Recursive folder ingest | shipped | e1bc951 |
 | ING-002 | PDF text-layer ingestion | shipped | 7a8bc49 |
 | ING-003 | File picker for single file | shipped | b0fd48f |
@@ -76,7 +77,7 @@
 | ING-007 | Apple Vision OCR path on macOS (native) | backlog | — |
 | ING-008 | "Zkontrolovat znovu" OCR button after user installs deps | shipped | 1244b02 |
 | ING-009 | Ingest progress events (files, chunks, embeddings) streamed to UI | shipped | 5318b34 |
-| UX-001 | Lesson target phrased in human-readable language, not raw WPM | planned | — |
+| UX-001 | Lesson target phrased in human-readable language, not raw WPM | shipped | dAVde |
 | UX-002 | Candle silent-switch fixed (progress or no-op message) | planned | — |
 | UX-003 | Colorblind-safe finger palette toggle | backlog | — |
 | UX-004 | Reduce-motion preference respected | backlog | — |
@@ -95,6 +96,7 @@
 | RES-002 | CHANGELOG.md + /about in-app renderer | shipped | this commit |
 | RES-003 | Living backlog kept in sync with every push | shipped | this commit |
 | RES-004 | Market scan + positioning memo | shipped | 5318b34 |
+| RES-005 | Persona forum (multi-voice debate transcripts driving prioritisation) | shipped | dAVde |
 
 ## Persona votes
 

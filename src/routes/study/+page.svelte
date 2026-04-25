@@ -2,14 +2,19 @@
   import { goto } from '$app/navigation';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { api } from '$lib/api';
+  import CopyPasteRephraseModal from '$lib/CopyPasteRephraseModal.svelte';
   import { currentSession } from '$lib/session-store.svelte';
   import type {
     ChapterInfo,
     ContentStrategy,
     DocumentInfo,
     ExamRamp,
-    IndexStatus
+    IndexStatus,
+    SessionPlan,
+    WeakNgram
   } from '$lib/types';
+
+  type RemixMode = 'off' | 'sub' | 'copypaste' | 'byok';
 
   type IngestEvent =
     | { kind: 'start'; path: string }
@@ -63,9 +68,18 @@
   let advanced = $state(false);
   let alpha = $state(0.7);
   let rephrase = $state(false);
+  let dictation = $state(false);
   let anthropicPresent = $state(false);
   let claudeSubLive = $state(false);
   let examRamps = $state<ExamRamp[]>([]);
+
+  // Three-tier remix auth cascade. UI shows the highest-priority option
+  // we can actually run; user can override.
+  let remixMode = $state<RemixMode>('off');
+  let copyPasteOpen = $state(false);
+  let pendingPlan = $state<SessionPlan | null>(null);
+  let pendingWeak = $state<WeakNgram[]>([]);
+  let copyPasteToast = $state<string | null>(null);
 
   $effect(() => {
     reload();
@@ -146,7 +160,22 @@
     }
   }
 
-  const remixAvailable = $derived(anthropicPresent || claudeSubLive);
+  // Copy-paste is always available — it just needs the student to have
+  // a browser and any free LLM tab open. Claude sub & BYOK are gated on
+  // credentials being present.
+  const remixAvailable = $derived(true);
+
+  // Pick the default remix mode whenever the student toggles "rephrase"
+  // on. Cascade: subscription → BYOK → copy-paste (free).
+  $effect(() => {
+    if (!rephrase) {
+      remixMode = 'off';
+    } else if (remixMode === 'off') {
+      if (claudeSubLive) remixMode = 'sub';
+      else if (anthropicPresent) remixMode = 'byok';
+      else remixMode = 'copypaste';
+    }
+  });
 
   const visibleDocs = $derived.by(() => {
     const f = docFilter.toLowerCase().trim();
@@ -217,25 +246,66 @@
     busy = true;
     error = null;
     try {
+      // Server-side rephrase only when sub or BYOK is the chosen path.
+      // Copy-paste mode runs the modal AFTER we have raw sentences so
+      // the student sees what they're remixing.
+      const useServerRephrase = rephrase && (remixMode === 'sub' || remixMode === 'byok');
+      // Dictation is incompatible with chapter strategy (sentence
+      // selection lives in pick_chapter, not pick_content).
+      const useDictation = dictation && strategy !== 'chapter';
       const plan = await api.createSession({
-        mode: 'content',
+        mode: useDictation ? 'dictation' : 'content',
         alpha: advanced ? alpha : 1.0,
         target_duration_s: duration,
-        content_strategy: strategy,
+        content_strategy: useDictation ? undefined : strategy,
         query: strategy !== 'chapter' ? query.trim() || undefined : undefined,
         chapter_id: strategy === 'chapter' && chapterId ? chapterId : undefined,
-        rephrase: rephrase && remixAvailable,
-        rephrase_style: rephrase ? 'keystrokes' : undefined,
+        rephrase: useServerRephrase,
+        rephrase_style: useServerRephrase ? 'keystrokes' : undefined,
         language: 'cs'
       });
       if (!plan.sentences.length) {
         error = emptyMessage();
         return;
       }
+      if (rephrase && remixMode === 'copypaste') {
+        // Stash the plan and open the modal. We need weak ngrams for the
+        // prompt; fetch in parallel with showing the UI.
+        pendingPlan = plan;
+        pendingWeak = await api.getWeakNgrams(8);
+        copyPasteOpen = true;
+        return;
+      }
       currentSession.plan = plan;
       currentSession.summary = null;
       await goto('/practice/session');
     } catch (e) { error = String(e); } finally { busy = false; }
+  }
+
+  function applyCopyPasteAndStart(
+    rewrites: string[],
+    meta: { accepted: number; total: number; warnings: string[] }
+  ) {
+    if (!pendingPlan) return;
+    // In-place replacement: same chunk_ids, same order, just swapped
+    // text. Keystroke target follows automatically.
+    const sentences = pendingPlan.sentences.map((s, i) => ({
+      ...s,
+      text: rewrites[i] ?? s.text
+    }));
+    currentSession.plan = { ...pendingPlan, sentences };
+    currentSession.summary = null;
+    copyPasteOpen = false;
+    pendingPlan = null;
+    copyPasteToast = `Remix: ${meta.accepted}/${meta.total} přijato${
+      meta.warnings.length > 0 ? ` (${meta.warnings.length} upozornění)` : ''
+    }.`;
+    void goto('/practice/session');
+  }
+
+  function cancelCopyPaste() {
+    copyPasteOpen = false;
+    pendingPlan = null;
   }
 
   function emptyMessage(): string {
@@ -265,6 +335,21 @@
 
 {#if error}
   <p class="error">{error}</p>
+{/if}
+
+{#if copyPasteToast}
+  <p class="toast" onanimationend={() => (copyPasteToast = null)}>{copyPasteToast}</p>
+{/if}
+
+{#if copyPasteOpen && pendingPlan}
+  <CopyPasteRephraseModal
+    sources={pendingPlan.sentences.map((s) => s.text)}
+    weakNgrams={pendingWeak.map((w) => w.ngram)}
+    style="keystrokes"
+    language="cs"
+    onApply={applyCopyPasteAndStart}
+    onCancel={cancelCopyPaste}
+  />
 {/if}
 
 {#if ingestProgress.active}
@@ -433,16 +518,64 @@
           </div>
         {/if}
         <label class="adv-toggle">
-          <input type="checkbox" bind:checked={rephrase} disabled={!remixAvailable} />
-          Remix (LLM přepíše věty s cílem na tvé slabiny) —
-          {#if claudeSubLive}
-            přihlášen přes Claude subscription ✓
-          {:else if anthropicPresent}
-            Anthropic klíč uložen ✓
-          {:else}
-            nejdřív přihlášení v <a href="/settings">Nastavení</a>
+          <input type="checkbox" bind:checked={dictation} disabled={strategy === 'chapter'} />
+          Diktát — Datlino věty čte nahlas a automaticky pauzuje, když nestíháš
+          {#if strategy === 'chapter'}
+            <span class="muted small">(nedostupné pro celé kapitoly)</span>
           {/if}
         </label>
+        <label class="adv-toggle">
+          <input type="checkbox" bind:checked={rephrase} />
+          Remix (LLM přepíše věty s cílem na tvé slabiny)
+        </label>
+        {#if rephrase}
+          <div class="remix-modes">
+            <button
+              type="button"
+              class="rmode"
+              class:active={remixMode === 'sub'}
+              disabled={!claudeSubLive}
+              onclick={() => (remixMode = 'sub')}
+            >
+              <strong>Claude subscription</strong>
+              <span>
+                {#if claudeSubLive}
+                  Přihlášen ✓ — bezešvé.
+                {:else}
+                  Není přihlášen. <a href="/settings">Přihlásit</a>
+                {/if}
+              </span>
+            </button>
+            <button
+              type="button"
+              class="rmode"
+              class:active={remixMode === 'copypaste'}
+              onclick={() => (remixMode = 'copypaste')}
+            >
+              <strong>Copy-paste do volného LLM <span class="badge">free</span></strong>
+              <span>
+                Datlino ti dá prompt, ty ho strčíš do ChatGPT / Claude.ai /
+                Gemini, výsledek vrátíš zpátky.
+              </span>
+            </button>
+            <button
+              type="button"
+              class="rmode"
+              class:active={remixMode === 'byok'}
+              disabled={!anthropicPresent}
+              onclick={() => (remixMode = 'byok')}
+            >
+              <strong>Vlastní Anthropic klíč</strong>
+              <span>
+                {#if anthropicPresent}
+                  Klíč uložen ✓ — automaticky, platí se za volání.
+                {:else}
+                  Nemáš klíč. <a href="/settings">Přidat</a>
+                {/if}
+              </span>
+            </button>
+          </div>
+        {/if}
       </div>
     </details>
 
@@ -746,5 +879,69 @@
     border-color: #b3271f;
     color: #b3271f;
     font-weight: 600;
+  }
+
+  .remix-modes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 0.4rem;
+    margin: 0.4rem 0 0.2rem;
+  }
+  .rmode {
+    text-align: left;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid rgba(28, 25, 23, 0.12);
+    background: #fffaf2;
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .rmode strong {
+    color: #b3271f;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .rmode span {
+    font-size: 0.75rem;
+    color: #57534e;
+  }
+  .rmode.active {
+    border-color: #b3271f;
+    background: rgba(179, 39, 31, 0.06);
+  }
+  .rmode:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .rmode a { color: #b3271f; }
+  .badge {
+    background: rgba(45, 106, 45, 0.15);
+    color: #2d6a2d;
+    padding: 0.05rem 0.35rem;
+    border-radius: 10px;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+  }
+
+  .toast {
+    background: rgba(45, 106, 45, 0.1);
+    color: #2d6a2d;
+    border: 1px solid rgba(45, 106, 45, 0.25);
+    border-radius: 6px;
+    padding: 0.5rem 0.85rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.88rem;
+    animation: fadeOut 4.5s forwards;
+  }
+  @keyframes fadeOut {
+    0%, 70% { opacity: 1; }
+    100% { opacity: 0; }
   }
 </style>

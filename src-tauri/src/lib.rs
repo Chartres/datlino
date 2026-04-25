@@ -21,7 +21,7 @@ pub mod watcher;
 
 use anyhow::Result;
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -311,6 +311,73 @@ fn list_exam_ramps() -> std::result::Result<Vec<curriculum::ExamRamp>, String> {
     Ok(curriculum::all_ramps())
 }
 
+// ---------- copy-paste rephrase (free-tier path) ----------
+
+#[derive(Debug, Deserialize)]
+pub struct CopyPasteFormatArgs {
+    pub sources: Vec<String>,
+    pub weak_ngrams: Vec<String>,
+    pub language: Option<String>,
+    pub style: Option<rephrase::RephraseStyle>,
+}
+
+#[tauri::command]
+fn build_copy_paste_prompt(
+    args: CopyPasteFormatArgs,
+) -> std::result::Result<rephrase::CopyPastePrompt, String> {
+    let style = args.style.unwrap_or(rephrase::RephraseStyle::Keystrokes);
+    let language = args.language.unwrap_or_else(|| "cs".into());
+    Ok(rephrase::format_copy_paste_prompt(
+        &args.sources,
+        &args.weak_ngrams,
+        &language,
+        style,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CopyPasteApplyArgs {
+    pub sources: Vec<String>,
+    pub raw: String,
+    pub similarity_floor: Option<f32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CopyPasteApplyResult {
+    pub outcomes: Vec<rephrase::RephraseOutcome>,
+    pub warnings: Vec<String>,
+}
+
+#[tauri::command]
+fn apply_copy_paste_rephrase(
+    args: CopyPasteApplyArgs,
+    state: State<'_, AppState>,
+) -> std::result::Result<CopyPasteApplyResult, String> {
+    let parsed = rephrase::parse_copy_paste_result(&args.raw).map_err(|e| e.to_string())?;
+    let conn = state.conn.lock().map_err(|e| e.to_string())?;
+    let (provider_str, _): (String, i64) = conn
+        .query_row(
+            "SELECT provider, dim FROM embedding_meta WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let kind = embeddings::EmbeddingProviderKind::parse(&provider_str);
+    let provider = embeddings::build(match kind {
+        embeddings::EmbeddingProviderKind::None => embeddings::EmbeddingProviderKind::Fake,
+        other => other,
+    })
+    .map_err(|e| e.to_string())?;
+
+    let outcomes =
+        rephrase::apply_copy_paste(&args.sources, &parsed, &*provider, args.similarity_floor)
+            .map_err(|e| e.to_string())?;
+    Ok(CopyPasteApplyResult {
+        outcomes,
+        warnings: parsed.parse_warnings,
+    })
+}
+
 #[tauri::command]
 fn list_documents(
     state: State<'_, AppState>,
@@ -490,6 +557,8 @@ pub fn run() {
             claude_subscription_status,
             list_intro_lessons,
             list_exam_ramps,
+            build_copy_paste_prompt,
+            apply_copy_paste_rephrase,
             list_documents,
             ingest_single_file,
             record_calibration_prediction,

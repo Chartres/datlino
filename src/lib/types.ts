@@ -6,7 +6,8 @@ export type PracticeMode =
   | 'hybrid'
   | 'intro_lesson'
   | 'cloze'
-  | 'exam_ramp';
+  | 'exam_ramp'
+  | 'dictation';
 
 export type ExamRamp = {
   id: string;
@@ -27,6 +28,7 @@ export type LessonListItem = {
   subtitle: string;
   target_accuracy: number;
   target_wpm: number;
+  target_human: string;
   unlocked: boolean;
   passed: boolean;
   best_wpm: number;

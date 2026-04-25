@@ -368,11 +368,30 @@
       {/if}
     </div>
 
-    <!-- Fallback: BYOK API key -->
+    <!-- Tier 2: Copy-paste (free, always available) -->
+    <div class="auth-card ok">
+      <h4>
+        Copy-paste do volného LLM
+        <span class="pill ok">Zdarma</span>
+      </h4>
+      <p>
+        Když nemáš Claude subscription ani API klíč, Datlino ti připraví
+        deterministický prompt s tvými větami a slabinami. Vlož ho do
+        <strong>ChatGPT, Claude.ai nebo Gemini</strong> (free účty stačí),
+        výsledek vrátíš zpátky a Datlino ho prožene podobnostní bránou
+        stejně jako přímou API.
+      </p>
+      <p class="muted small">
+        Žádný klíč, žádné platby. Trvá pár vteřin navíc na sezení. Volíš
+        u každého sezení v sekci „Pokročilé → Remix" na <a href="/study">Učím se obsah</a>.
+      </p>
+    </div>
+
+    <!-- Tier 3: Fallback BYOK API key -->
     <h4>Nebo BYOK Anthropic API klíč</h4>
     <p class="muted small">
-      Alternativa, když nemáš subscription — platíš za jednotlivé volání.
-      Klíč se ukládá do klíčenky OS, ne do souboru.
+      Alternativa, když chceš plně automatický remix — platíš za
+      jednotlivé volání. Klíč se ukládá do klíčenky OS, ne do souboru.
       {#if anthropicPresent}<br /><strong>Aktuálně uložen.</strong>{/if}
     </p>
 

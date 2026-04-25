@@ -39,6 +39,50 @@ pub struct LessonMeta {
     pub target_wpm: f64,
 }
 
+/// Human-readable Czech rendering of a target. The numeric form
+/// (`Cíl: 10 WPM · 92 %`) means nothing to a 14-year-old on day one.
+/// We translate WPM into a felt unit ("cca 2 slova za sekundu") and
+/// accuracy into a 10-attempt frame ("9 z 10 vět skoro bez chyby") —
+/// then keep the numbers visible alongside for adults who care.
+///
+/// Ranges are coarse on purpose. The point is communication, not
+/// precision; the FSRS scorer still uses the raw numbers.
+pub fn human_target(meta: &LessonMeta) -> String {
+    let acc = meta.target_accuracy;
+    let wpm = meta.target_wpm;
+
+    let acc_phrase = if acc >= 95.0 {
+        "skoro bez chyby"
+    } else if acc >= 90.0 {
+        "s minimem chyb"
+    } else if acc >= 85.0 {
+        "s pár drobnými chybami"
+    } else {
+        "i s několika chybami"
+    };
+
+    let wpm_phrase = if wpm < 12.0 {
+        "v klidu, ne na rychlost"
+    } else if wpm < 18.0 {
+        "tempem normálního čtení"
+    } else if wpm < 25.0 {
+        "tak rychle, jak normálně mluvíš"
+    } else {
+        "svižně, bez váhání"
+    };
+
+    // Accuracy → "X z 10". 92% → 9.2 → "9 z 10". 88% → "9 z 10". 80%
+    // → "8 z 10". Round to nearest.
+    let out_of_ten = ((acc / 10.0).round() as i32).clamp(5, 10);
+
+    format!(
+        "Zvládnul jsi to, když napíšeš {of_ten} z 10 vět {acc_phrase} a píšeš {wpm_phrase}.",
+        of_ten = out_of_ten,
+        acc_phrase = acc_phrase,
+        wpm_phrase = wpm_phrase,
+    )
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LessonDrill {
     pub text: String,
@@ -416,5 +460,24 @@ mod tests {
         assert_eq!(next_lesson_id(first), Some(second));
         let last = c.last().unwrap().meta.id;
         assert_eq!(next_lesson_id(last), None);
+    }
+
+    #[test]
+    fn human_target_translates_numbers_to_words() {
+        let easy = LessonMeta {
+            id: "x", title: "x", subtitle: "x",
+            target_accuracy: 92.0, target_wpm: 10.0,
+        };
+        let s = human_target(&easy);
+        assert!(s.contains("9 z 10"), "got: {s}");
+        assert!(s.contains("v klidu"), "got: {s}");
+
+        let hard = LessonMeta {
+            id: "x", title: "x", subtitle: "x",
+            target_accuracy: 95.0, target_wpm: 30.0,
+        };
+        let s2 = human_target(&hard);
+        assert!(s2.contains("10 z 10") || s2.contains("9 z 10"));
+        assert!(s2.contains("svižně"));
     }
 }

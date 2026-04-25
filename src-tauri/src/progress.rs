@@ -398,6 +398,10 @@ pub struct LessonListItem {
     pub subtitle: String,
     pub target_accuracy: f64,
     pub target_wpm: f64,
+    /// Human-readable Czech rendering of the target — what to show
+    /// students who don't yet know what WPM means. The raw numbers
+    /// stay above as a fallback for adults / power users.
+    pub target_human: String,
     pub unlocked: bool,
     pub passed: bool,
     pub best_wpm: f64,
@@ -449,6 +453,7 @@ pub fn list_intro_lessons(
             subtitle: lesson.meta.subtitle.to_string(),
             target_accuracy: lesson.meta.target_accuracy,
             target_wpm: lesson.meta.target_wpm,
+            target_human: lessons::human_target(&lesson.meta),
             unlocked: prev_passed,
             passed,
             best_wpm: progress.as_ref().map(|p| p.best_wpm).unwrap_or(0.0),

@@ -310,6 +310,214 @@ fn extract_json_object(s: &str) -> Option<String> {
     None
 }
 
+// ---------- Copy-paste path (free-tier students) ----------
+//
+// Many students don't have a Claude subscription and won't paste a
+// BYOK key — but they DO have free ChatGPT / Claude.ai / Gemini /
+// Mistral chat. This path generates a deterministic prompt the
+// student copies into their chat of choice; pastes the JSON answer
+// back into Datlino; we parse, gate on similarity, and run the
+// session with the rewrites.
+//
+// Constraints same as the API path: preserve facts / proper nouns
+// verbatim, ±20 % length, JSON-only output. We're explicit about the
+// shape so the student gets a useful answer regardless of which LLM
+// they pick.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CopyPastePrompt {
+    /// The full prompt as a single string the student can copy with
+    /// one click. Already includes system instructions + per-sentence
+    /// numbering.
+    pub prompt: String,
+    /// The number of source sentences embedded — the student's paste
+    /// must include the same count.
+    pub expected_count: usize,
+}
+
+pub fn format_copy_paste_prompt(
+    sources: &[String],
+    weak_ngrams: &[String],
+    language: &str,
+    style: RephraseStyle,
+) -> CopyPastePrompt {
+    let style_block = match style {
+        RephraseStyle::Keystrokes => {
+            "Cíl: do každé věty zapracuj víc kombinací z 'klíčů k procvičení'. \
+             Stejnou úroveň slovníku, žádné zjednodušování."
+        }
+        RephraseStyle::ThingExplainer => {
+            "Cíl: přepiš tak, aby věta používala jen ~1000 nejběžnějších slov \
+             cílového jazyka. Vlastní jména, data, čísla a odborné termíny \
+             zůstávají VERBATIM."
+        }
+        RephraseStyle::Both => {
+            "Cíl: jednodušší slovník + zapracuj víc kombinací z 'klíčů k procvičení'. \
+             Vlastní jména a fakta nikdy neměň."
+        }
+    };
+
+    let mut sources_block = String::new();
+    for (i, s) in sources.iter().enumerate() {
+        sources_block.push_str(&format!("{}. {}\n", i + 1, s));
+    }
+
+    let weak_block = if weak_ngrams.is_empty() {
+        "(žádné — piš přirozeně)".to_string()
+    } else {
+        weak_ngrams.join(", ")
+    };
+
+    let prompt = format!(
+        "Jsi pomocník studenta, který se učí psát naslepo na svých vlastních materiálech.
+
+Hard rules pro každou větu:
+1. Zachovej KAŽDÉ faktické tvrzení, vlastní jméno, datum, číslo a odborný termín VERBATIM (včetně diakritiky).
+2. Délka rewrite v rozmezí ±20 % oproti zdroji.
+3. Cílový jazyk: {language}.
+4. {style_block}
+
+Vstup je očíslovaný seznam vět. Odpověz POUZE jedním JSON polem stejné délky:
+[{{\"i\": 1, \"text\": \"<rewrite první věty>\"}}, {{\"i\": 2, \"text\": \"<rewrite druhé>\"}}, …]
+
+Žádné komentáře, žádný text před ani za JSON. Pokud se některá věta přepsat nedá (formule, datovaný seznam), vrať ji verbatim.
+
+Klíče k procvičení (zapracuj kde se hodí): {weak_block}
+
+Věty k přepisu:
+{sources_block}",
+        language = language,
+        style_block = style_block,
+        weak_block = weak_block,
+        sources_block = sources_block.trim_end(),
+    );
+
+    CopyPastePrompt {
+        prompt,
+        expected_count: sources.len(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CopyPasteResult {
+    /// Per-source-index → rewrite text, where we managed to parse
+    /// something. Indices not present here mean the LLM dropped that
+    /// line; the caller falls back to the verbatim source.
+    pub by_index: Vec<(usize, String)>,
+    pub raw_count: usize,
+    pub parse_warnings: Vec<String>,
+}
+
+/// Parse what the student pasted from their LLM. Tolerant of code
+/// fences, leading prose, or trailing commentary — we extract the
+/// first valid JSON array of `{i, text}` objects.
+pub fn parse_copy_paste_result(raw: &str) -> Result<CopyPasteResult> {
+    let json_slice = extract_json_array(raw)
+        .ok_or_else(|| anyhow!("Nepodařilo se najít JSON pole v odpovědi. Zkontroluj, že LLM vrátil [{{\"i\":1,\"text\":\"…\"}}, …]."))?;
+
+    #[derive(Deserialize)]
+    struct Item {
+        #[serde(default)]
+        i: Option<usize>,
+        #[serde(default)]
+        index: Option<usize>,
+        text: String,
+    }
+    let items: Vec<Item> = serde_json::from_str(&json_slice)
+        .map_err(|e| anyhow!("JSON parse: {e}"))?;
+
+    let mut warnings = Vec::new();
+    let mut out = Vec::new();
+    for (pos, it) in items.iter().enumerate() {
+        let idx = it.i.or(it.index).unwrap_or(pos + 1);
+        let text = it.text.trim();
+        if text.is_empty() {
+            warnings.push(format!("Položka {idx} má prázdný text — přeskočena."));
+            continue;
+        }
+        // The student's source numbering started at 1; we store
+        // 0-based for downstream zip with the source list.
+        out.push((idx.saturating_sub(1), text.to_string()));
+    }
+    Ok(CopyPasteResult {
+        raw_count: items.len(),
+        by_index: out,
+        parse_warnings: warnings,
+    })
+}
+
+fn extract_json_array(s: &str) -> Option<String> {
+    let start = s.find('[')?;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut prev_escape = false;
+    for (i, c) in s[start..].char_indices() {
+        if in_string {
+            if !prev_escape && c == '"' {
+                in_string = false;
+            }
+            prev_escape = c == '\\' && !prev_escape;
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(s[start..start + i + 1].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Apply parsed rewrites to a list of source sentences, returning
+/// per-sentence outcomes. The similarity gate runs against the active
+/// embedding provider — same contract as the API path. Rejected
+/// rewrites return the verbatim source instead.
+pub fn apply_copy_paste(
+    sources: &[String],
+    parsed: &CopyPasteResult,
+    provider: &dyn EmbeddingProvider,
+    similarity_floor: Option<f32>,
+) -> Result<Vec<RephraseOutcome>> {
+    let floor = similarity_floor.unwrap_or(DEFAULT_SIMILARITY_FLOOR);
+    let mut outcomes = Vec::with_capacity(sources.len());
+    for (idx, src) in sources.iter().enumerate() {
+        let rewrite = parsed
+            .by_index
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, t)| t.clone());
+        let Some(text) = rewrite else {
+            outcomes.push(RephraseOutcome {
+                text: src.clone(),
+                similarity: 1.0,
+                generator_model: "copy-paste:none".into(),
+                accepted: false,
+            });
+            continue;
+        };
+        let vectors = provider.embed_batch(&[src.clone(), text.clone()])?;
+        let sim = if vectors.len() == 2 {
+            embeddings::cosine_similarity(&vectors[0], &vectors[1])
+        } else {
+            0.0
+        };
+        let accepted = sim >= floor;
+        outcomes.push(RephraseOutcome {
+            text: if accepted { text } else { src.clone() },
+            similarity: sim,
+            generator_model: "copy-paste:user-llm".into(),
+            accepted,
+        });
+    }
+    Ok(outcomes)
+}
+
 // ---------- Storage ----------
 
 /// Persist an accepted rephrase in `rephrased_chunk` so the session can
@@ -393,6 +601,64 @@ mod tests {
         assert!(p.contains("BOTH"));
         assert!(p.contains("1000 most common words"));
         assert!(p.contains("weak bigrams"));
+    }
+
+    #[test]
+    fn copy_paste_prompt_embeds_sentences_and_weak_keys() {
+        let p = format_copy_paste_prompt(
+            &["První věta.".to_string(), "Druhá věta.".to_string()],
+            &["řč".to_string(), "ěš".to_string()],
+            "cs",
+            RephraseStyle::Keystrokes,
+        );
+        assert_eq!(p.expected_count, 2);
+        assert!(p.prompt.contains("První věta."));
+        assert!(p.prompt.contains("Druhá věta."));
+        assert!(p.prompt.contains("řč"));
+        assert!(p.prompt.contains("Cílový jazyk: cs"));
+        assert!(p.prompt.contains("[{") || p.prompt.contains("[{\"i\""));
+    }
+
+    #[test]
+    fn parse_copy_paste_handles_code_fences_and_extra_prose() {
+        let raw = r#"Jasné, tady to je:
+
+```json
+[
+  {"i": 1, "text": "Rewrite první."},
+  {"i": 2, "text": "Rewrite druhé."}
+]
+```
+Doufám, že se hodí!"#;
+        let r = parse_copy_paste_result(raw).unwrap();
+        assert_eq!(r.raw_count, 2);
+        assert_eq!(r.by_index[0].0, 0);
+        assert_eq!(r.by_index[0].1, "Rewrite první.");
+        assert_eq!(r.by_index[1].0, 1);
+    }
+
+    #[test]
+    fn parse_copy_paste_errors_when_no_json() {
+        let r = parse_copy_paste_result("Promiň, nic nemám.");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn apply_copy_paste_falls_back_to_source_on_low_similarity() {
+        use crate::embeddings::FakeEmbedder;
+        let sources = vec!["Habsburkové vládli v Čechách.".to_string()];
+        // The "rewrite" is on a totally different topic — drift gate
+        // should reject and we fall back to source.
+        let parsed = CopyPasteResult {
+            raw_count: 1,
+            by_index: vec![(0, "Fotosyntéza je biologický proces.".into())],
+            parse_warnings: vec![],
+        };
+        let provider = FakeEmbedder::new();
+        let outcomes = apply_copy_paste(&sources, &parsed, &provider, Some(0.85)).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert!(!outcomes[0].accepted);
+        assert_eq!(outcomes[0].text, sources[0]); // verbatim fallback
     }
 
     #[test]

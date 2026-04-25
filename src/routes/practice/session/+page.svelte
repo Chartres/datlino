@@ -33,6 +33,112 @@
   let submitting = $state(false);
   let lastKeyTime = $state(0);
 
+  // ----- Dictation (PE-004) -----
+  // When `plan.mode === 'dictation'`, the browser reads the sentence
+  // aloud using SpeechSynthesis. We track the TTS character cursor via
+  // `onboundary` events and adaptively pause when the student falls
+  // behind (LEAD_PAUSE chars), resuming when they catch up
+  // (LEAD_RESUME chars). Replay button restarts the current sentence.
+  const LEAD_PAUSE = 8; // ~1.5 Czech words ahead → pause
+  const LEAD_RESUME = 3; // student within 3 chars → resume
+  const isDictation = $derived(plan?.mode === 'dictation');
+  const ttsAvailable =
+    typeof window !== 'undefined' &&
+    typeof window.speechSynthesis !== 'undefined';
+  let ttsCharIndex = $state(0);
+  let ttsPaused = $state(false);
+  let ttsFinished = $state(false);
+  let dictationMuted = $state(false);
+  let dictationRate = $state(0.9);
+  let utterance: SpeechSynthesisUtterance | null = null;
+
+  function speakCurrent() {
+    if (!ttsAvailable || !isDictation || dictationMuted) return;
+    if (!target) return;
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // Some browsers throw when there's nothing to cancel — ignore.
+    }
+    const u = new SpeechSynthesisUtterance(target);
+    u.lang = 'cs-CZ';
+    u.rate = dictationRate;
+    u.pitch = 1.0;
+    // Match a Czech voice when available; otherwise the default voice
+    // still provides a useful rhythm pacer.
+    const voices = window.speechSynthesis.getVoices();
+    const cs = voices.find((v) => v.lang?.toLowerCase().startsWith('cs'));
+    if (cs) u.voice = cs;
+    u.onboundary = (ev) => {
+      // charIndex is in the utterance string; we feed it raw target
+      // (already normalised). Treat as leader cursor for the pacer.
+      ttsCharIndex = ev.charIndex ?? ttsCharIndex;
+    };
+    u.onend = () => {
+      ttsFinished = true;
+      ttsCharIndex = targetChars.length;
+    };
+    u.onstart = () => {
+      ttsPaused = false;
+      ttsFinished = false;
+    };
+    u.onerror = () => {
+      ttsPaused = false;
+      ttsFinished = true;
+    };
+    utterance = u;
+    ttsCharIndex = 0;
+    ttsFinished = false;
+    ttsPaused = false;
+    window.speechSynthesis.speak(u);
+  }
+
+  function stopTts() {
+    if (!ttsAvailable) return;
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+    utterance = null;
+    ttsPaused = false;
+  }
+
+  function pauseTts() {
+    if (!ttsAvailable) return;
+    if (ttsFinished) return;
+    try {
+      window.speechSynthesis.pause();
+      ttsPaused = true;
+    } catch {
+      // ignore
+    }
+  }
+
+  function resumeTts() {
+    if (!ttsAvailable) return;
+    if (ttsFinished) return;
+    try {
+      window.speechSynthesis.resume();
+      ttsPaused = false;
+    } catch {
+      // ignore
+    }
+  }
+
+  function replayCurrent() {
+    speakCurrent();
+  }
+
+  function toggleMute() {
+    dictationMuted = !dictationMuted;
+    if (dictationMuted) {
+      stopTts();
+    } else if (target) {
+      speakCurrent();
+    }
+  }
+
   // Some chunks contain chars the student can't physically type on a CZ
   // or SK keyboard — subscripts (H₂O), superscripts (m²), smart quotes,
   // em/en dashes, non-breaking spaces. We normalise the *display* target
@@ -145,6 +251,32 @@
     lastKeyTime = attemptStart;
     // Scroll long passages back to the top when a new sentence starts.
     if (surfaceEl) surfaceEl.scrollTop = 0;
+    // Dictation: speak the new sentence after a calibration delay so the
+    // student isn't frozen by both the modal and the TTS firing at once.
+    if (isDictation && !showCalibration && !dictationMuted) {
+      setTimeout(speakCurrent, 250);
+    }
+  });
+
+  // Adaptive pacer: when TTS is reading ahead of the student's cursor by
+  // LEAD_PAUSE chars, pause; when the student catches up to within
+  // LEAD_RESUME, resume. Pure derivation — no dependency on a tick loop.
+  $effect(() => {
+    if (!isDictation || !ttsAvailable || dictationMuted) return;
+    if (ttsFinished) return;
+    const lead = ttsCharIndex - cursor;
+    if (lead >= LEAD_PAUSE && !ttsPaused) {
+      pauseTts();
+    } else if (lead <= LEAD_RESUME && ttsPaused) {
+      resumeTts();
+    }
+  });
+
+  // Stop TTS on unmount (route change, finalize) so audio doesn't leak.
+  $effect(() => {
+    return () => {
+      stopTts();
+    };
   });
 
   // Keep the active character visible as the cursor advances through a
@@ -374,6 +506,7 @@
   async function finishSession() {
     if (submitting || !plan) return;
     submitting = true;
+    stopTts();
     // Flush the in-progress sentence if the user pressed Escape mid-way.
     if (currentAttemptKeystrokes.length > 0 && typedCount > 0) {
       const now = performance.now();
@@ -467,6 +600,55 @@
       <button type="button" onclick={finishSession} disabled={submitting}>Ukončit</button>
     </div>
   </div>
+
+  {#if isDictation}
+    <div
+      class="dictation-bar"
+      class:paused={ttsPaused}
+      class:muted-bar={dictationMuted}
+      aria-live="polite"
+    >
+      <div class="dict-status">
+        {#if dictationMuted}
+          <span class="dot" aria-hidden="true">🔇</span>
+          <span>Diktát ztlumený — zapni přehrávání pro asistenci hlasem.</span>
+        {:else if !ttsAvailable}
+          <span class="dot" aria-hidden="true">⚠️</span>
+          <span>Tvůj prohlížeč nepodporuje hlasový diktát. Sezení pojede potichu.</span>
+        {:else if ttsPaused}
+          <span class="dot" aria-hidden="true">⏸</span>
+          <span>Pauza — Datlino tě čeká, dohánej.</span>
+        {:else if ttsFinished}
+          <span class="dot" aria-hidden="true">✓</span>
+          <span>Dočteno — dopiš větu nebo přehraj znovu.</span>
+        {:else}
+          <span class="dot speaking" aria-hidden="true">🔊</span>
+          <span>Datlino čte. Piš v tempu, můžeš zaostat o {LEAD_PAUSE} znaků.</span>
+        {/if}
+      </div>
+      <div class="dict-actions">
+        <label class="rate-ctl">
+          Tempo
+          <input
+            type="range"
+            min="0.6"
+            max="1.2"
+            step="0.05"
+            bind:value={dictationRate}
+            disabled={dictationMuted}
+            aria-label="Rychlost čtení"
+          />
+          <span>{dictationRate.toFixed(2)}×</span>
+        </label>
+        <button type="button" onclick={replayCurrent} disabled={dictationMuted || !ttsAvailable}>
+          ↻ Přehrát znovu
+        </button>
+        <button type="button" onclick={toggleMute}>
+          {dictationMuted ? 'Zapnout zvuk' : 'Ztlumit'}
+        </button>
+      </div>
+    </div>
+  {/if}
 
   <div class="typing-surface" role="presentation" bind:this={surfaceEl}>
     {#each wordGroups as group (group.key)}
@@ -569,6 +751,79 @@
   .actions button:hover {
     border-color: #b3271f;
     color: #b3271f;
+  }
+
+  .dictation-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.55rem 0.85rem;
+    background: rgba(45, 106, 45, 0.06);
+    border: 1px solid rgba(45, 106, 45, 0.25);
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
+    color: #1c1917;
+    flex-wrap: wrap;
+  }
+  .dictation-bar.paused {
+    background: rgba(180, 143, 0, 0.08);
+    border-color: rgba(180, 143, 0, 0.35);
+  }
+  .dictation-bar.muted-bar {
+    background: rgba(28, 25, 23, 0.04);
+    border-color: rgba(28, 25, 23, 0.15);
+    color: #57534e;
+  }
+  .dict-status {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex: 1;
+    min-width: 200px;
+  }
+  .dot { font-size: 1.1rem; line-height: 1; }
+  .dot.speaking {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .dict-actions {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .dict-actions button {
+    padding: 0.35rem 0.75rem;
+    border: 1px solid rgba(28, 25, 23, 0.2);
+    background: #fffaf2;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.82rem;
+    color: #44403c;
+  }
+  .dict-actions button:hover:not(:disabled) {
+    border-color: #b3271f;
+    color: #b3271f;
+  }
+  .dict-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .rate-ctl {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    color: #57534e;
+  }
+  .rate-ctl input[type='range'] { width: 110px; }
+  .rate-ctl span {
+    min-width: 2.5rem;
+    font-variant-numeric: tabular-nums;
+    color: #292524;
   }
 
   .typing-surface {

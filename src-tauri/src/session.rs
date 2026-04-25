@@ -52,6 +52,11 @@ pub enum PracticeMode {
     /// stable id. Student types pre-built, CC-BY-licensable content
     /// tailored to a specific exam.
     ExamRamp,
+    /// TTS dictation: same sentences as Content/Across, but the frontend
+    /// reads them aloud and adapts pace to the student's typing speed.
+    /// Pure presentation mode — backend treats it as Content for
+    /// generation purposes.
+    Dictation,
 }
 
 impl PracticeMode {
@@ -65,6 +70,7 @@ impl PracticeMode {
             PracticeMode::IntroLesson => "intro_lesson",
             PracticeMode::Cloze => "cloze",
             PracticeMode::ExamRamp => "exam_ramp",
+            PracticeMode::Dictation => "dictation",
         }
     }
 }
@@ -224,6 +230,17 @@ pub fn create_session(
         PracticeMode::IntroLesson => pick_intro_lesson(conn, user_id, req)?,
         PracticeMode::Cloze => pick_cloze(conn, user_id, req)?,
         PracticeMode::ExamRamp => pick_exam_ramp(req)?,
+        // Dictation reuses content-style picking. The student "drills"
+        // the same kind of sentences they'd type silently — the only
+        // difference is presentation (TTS + adaptive pause). When a
+        // document_id is pinned, drill that document end-to-end.
+        PracticeMode::Dictation => {
+            if let Some(doc_id) = req.document_id {
+                pick_document(conn, doc_id, req.target_duration_s)?
+            } else {
+                pick_content(conn, user_id, req)?
+            }
+        }
     };
 
     // Optional rephrase pass — only for Content mode with backing chunks.

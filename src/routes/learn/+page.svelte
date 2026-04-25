@@ -249,10 +249,12 @@
               {#if !lesson.unlocked}<span class="mark locked-mark">🔒</span>{/if}
             </h4>
             <p class="sub">{lesson.subtitle}</p>
+            <p class="target-human">{lesson.target_human}</p>
             <p class="targets">
-              Cíl: {lesson.target_wpm.toFixed(0)} WPM · {lesson.target_accuracy.toFixed(0)}% přesnost
+              <span class="muted-label">Číselný cíl:</span>
+              {lesson.target_wpm.toFixed(0)} WPM · {lesson.target_accuracy.toFixed(0)}%
               {#if lesson.attempts > 0}
-                · tvé: {lesson.best_wpm.toFixed(0)} · {lesson.best_accuracy.toFixed(0)}%
+                · tvé: {lesson.best_wpm.toFixed(0)} WPM / {lesson.best_accuracy.toFixed(0)}%
               {/if}
             </p>
           </div>
@@ -390,7 +392,19 @@
   .mark { margin-left: 0.4rem; color: #2d6a2d; font-size: 0.8rem; font-weight: 600; }
   .mark.locked-mark { color: #78716c; }
   .sub { margin: 0 0 0.2rem; font-size: 0.82rem; color: #57534e; }
-  .targets { margin: 0; font-size: 0.75rem; color: #78716c; }
+  .target-human {
+    margin: 0 0 0.2rem;
+    font-size: 0.82rem;
+    color: #292524;
+    font-style: italic;
+  }
+  .targets { margin: 0; font-size: 0.72rem; color: #a8a29e; }
+  .muted-label {
+    text-transform: uppercase;
+    font-size: 0.65rem;
+    letter-spacing: 0.05em;
+    margin-right: 0.2rem;
+  }
   button.small {
     padding: 0.4rem 0.8rem;
     border: 1px solid #b3271f;

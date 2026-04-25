@@ -8,6 +8,37 @@ Dates use the commit day. The `[ref]` handles point at backlog items in
 
 ## Unreleased
 
+**Persona forum, free-tier copy-paste remix, dictation, human-readable
+lesson targets.** `[RES-005 PE-014 PE-004 UX-001]`
+
+- **Copy-paste remix (free tier).** Students who don't have a Claude
+  subscription or an Anthropic API key now get a proper second-class
+  path for AI rephrase: Datlino assembles a deterministic prompt with
+  the picked sentences + the student's weak n-grams, the student
+  pastes it into ChatGPT / Claude.ai / Gemini (any free chat), pastes
+  the JSON back, and Datlino runs the same cosine-similarity gate
+  (≥ 0.75) the API path uses. Remix on `/study` now offers three
+  modes — Claude subscription, copy-paste (free), BYOK API key —
+  with the cascade auto-picking the highest available. Settings page
+  adds the matching second-tier card.
+- **Dictation mode (PE-004).** New checkbox on `/study` Pokročilé:
+  "Diktát — Datlino věty čte nahlas a automaticky pauzuje, když
+  nestíháš." Uses the browser SpeechSynthesis API with `cs-CZ` voice
+  when available; the practice page tracks the TTS character cursor
+  via `onboundary` events and pauses playback when the student falls
+  ≥ 8 chars behind, resumes when they catch up to within 3.
+  Per-sentence rate slider (0.6–1.2×) and replay button on the
+  in-session bar; mute toggle for kids in shared spaces.
+- **UX-001: human-readable lesson targets.** Each intro lesson on
+  `/learn` now shows a sentence like *"Zvládnul jsi to, když napíšeš
+  9 z 10 vět skoro bez chyby a píšeš v klidu, ne na rychlost."* in
+  italic, with the raw WPM/accuracy numbers de-emphasised below as
+  *Číselný cíl:* — for kids who don't yet know what 25 WPM means.
+- **Persona forum.** `research/forum/session-001.md` — five enriched
+  personas argue across four rounds (what to build next, mode wars,
+  killer feature for parents, biggest product risk) with a synthesis
+  section. Used as input for prioritising shipped features.
+
 **Top-4 voted features: ingest progress, exam ramps, installers, iPad
 scaffold + market positioning.** `[ING-009 PE-012 DIS-001 PLT-001 RES-004]`
 

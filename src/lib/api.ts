@@ -69,6 +69,29 @@ export const api = {
   listIntroLessons: () => invoke<LessonListItem[]>('list_intro_lessons'),
   listExamRamps: () => invoke<ExamRamp[]>('list_exam_ramps'),
 
+  // copy-paste rephrase
+  buildCopyPastePrompt: (
+    sources: string[],
+    weakNgrams: string[],
+    language?: string,
+    style?: 'keystrokes' | 'thing_explainer' | 'both'
+  ) =>
+    invoke<{ prompt: string; expected_count: number }>('build_copy_paste_prompt', {
+      args: { sources, weak_ngrams: weakNgrams, language, style }
+    }),
+  applyCopyPasteRephrase: (sources: string[], raw: string, similarityFloor?: number) =>
+    invoke<{
+      outcomes: {
+        text: string;
+        similarity: number;
+        generator_model: string;
+        accepted: boolean;
+      }[];
+      warnings: string[];
+    }>('apply_copy_paste_rephrase', {
+      args: { sources, raw, similarity_floor: similarityFloor }
+    }),
+
   // about + changelog
   getChangelog: () => invoke<string>('get_changelog'),
   getVersion: () => invoke<string>('get_version'),
