@@ -1,16 +1,24 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import { profile, refreshProfile } from '$lib/profile.svelte';
+  import { analyticsEnabled, setAnalyticsConsent } from '$lib/flywheel';
+  import FeedbackCard from '$lib/FeedbackCard.svelte';
   import type {
     ClaudeSubscriptionStatus,
     EmbeddingProviderKind,
     EmbeddingStatus
   } from '$lib/types';
 
+  let analyticsOn = $state(analyticsEnabled());
+  function toggleAnalytics() {
+    analyticsOn = !analyticsOn;
+    setAnalyticsConsent(analyticsOn);
+  }
+
   // Per Phase-1 IA reorg: four named sections, all closed by default
   // except Profil. Eliška shouldn't hit infrastructure content unless
   // she opens it deliberately; Martin can expand everything in 4 clicks.
-  let openSection = $state<'profil' | 'search' | 'remix' | 'ocr' | null>('profil');
+  let openSection = $state<'profil' | 'soukromi' | 'search' | 'remix' | 'ocr' | null>('profil');
 
   // --- state ---
   let embStatus = $state<EmbeddingStatus | null>(null);
@@ -48,7 +56,7 @@
     }
   }
 
-  function toggle(name: 'profil' | 'search' | 'remix' | 'ocr') {
+  function toggle(name: 'profil' | 'soukromi' | 'search' | 'remix' | 'ocr') {
     openSection = openSection === name ? null : name;
   }
 
@@ -223,6 +231,30 @@
       Podrobná historie a slabé klávesy žijí na <a href="/progress">Pokroku</a>.
       Export a reset přijdou v samostatné verzi.
     </p>
+  </div>
+</details>
+
+<!-- =================================================================
+     Soukromí — anonymní statistiky (opt-in) + zpětná vazba
+     ================================================================= -->
+<details class="section" open={openSection === 'soukromi'}>
+  <summary onclick={(e) => { e.preventDefault(); toggle('soukromi'); }}>
+    <span class="sec-num">★</span>
+    <span class="sec-title">Soukromí &amp; zpětná vazba</span>
+    <span class="sec-sub">Statistiky jen s tvým svolením</span>
+  </summary>
+  <div class="section-body">
+    <label class="consent">
+      <input type="checkbox" checked={analyticsOn} onchange={toggleAnalytics} />
+      <span>
+        Posílat <strong>anonymní statistiky</strong> používání (kolik sezení, WPM, přesnost).
+        Nikdy se neposílá obsah tvých poznámek. Ve výchozím stavu vypnuto.
+      </span>
+    </label>
+    <p class="muted small">
+      Zpětnou vazbu můžeš poslat kdykoli — píšeš přímo autorovi:
+    </p>
+    <FeedbackCard context="settings" />
   </div>
 </details>
 
