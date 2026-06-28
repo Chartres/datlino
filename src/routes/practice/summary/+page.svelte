@@ -3,8 +3,19 @@
   import { api } from '$lib/api';
   import { currentSession } from '$lib/session-store.svelte';
   import { badgeLabels } from '$lib/mode-meta';
+  import FeedbackCard from '$lib/FeedbackCard.svelte';
+  import { sessionCompleted } from '$lib/flywheel';
 
   const summary = $derived(currentSession.summary);
+
+  // The aha moment: a finished session. Fires once, analytics-consent-gated.
+  let conversionLogged = false;
+  $effect(() => {
+    if (summary && !conversionLogged) {
+      conversionLogged = true;
+      sessionCompleted({ wpm: Math.round(summary.wpm), accuracy: Math.round(summary.accuracy_pct) });
+    }
+  });
 
   let difficulty = $state<number | null>(null);
   let note = $state('');
@@ -146,6 +157,8 @@
   {:else}
     <p class="muted small">Reflexe uložena. Zobrazí se na Pokroku jako kalibrační bod.</p>
   {/if}
+
+  <FeedbackCard context="summary" />
 
   <section class="next">
     {#if summary.lesson_mastered || (summary.lesson_progress ?? null) !== null}
