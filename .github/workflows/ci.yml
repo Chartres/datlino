@@ -1,0 +1,29 @@
+# Flywheel Standard canonical CI gate (docs/standards/ci.template.yml in the hub).
+# Blocks only on truth: check (types), test, build. Fast via cache + concurrency.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: macos-14 # tauri deps; matches the release runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run check
+      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml
+      - run: npm run build
+      - name: Persona-visual e2e (screenshots committed for inspection)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run research:pw
