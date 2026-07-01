@@ -159,7 +159,7 @@ fn paja_five_day_ritual_streak_and_baseline_climb() {
         // Manually advance `last_session_date` one day at a time so the
         // streak logic sees consecutive days (real clock would take 5 days).
         conn.execute(
-            "UPDATE user_profile SET last_session_date = date('now', ?1 || ' days')",
+            "UPDATE user_profile SET last_session_date = date('now', 'localtime', ?1 || ' days')",
             rusqlite::params![format!("-{}", 5 - day)],
         )
         .unwrap();
@@ -183,7 +183,7 @@ fn paja_five_day_ritual_streak_and_baseline_climb() {
     // Reset the profile's last-seen to yesterday so our 6th session
     // extends the streak rather than resetting it.
     conn.execute(
-        "UPDATE user_profile SET last_session_date = date('now','-1 day')",
+        "UPDATE user_profile SET last_session_date = date('now', 'localtime', '-1 day')",
         [],
     )
     .unwrap();
